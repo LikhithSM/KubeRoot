@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: kuberoot-postgres
+    environment:
+      POSTGRES_USER: kuberoot
+      POSTGRES_PASSWORD: kuberoot_local
+      POSTGRES_DB: kuberoot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kuberoot -d kuberoot"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kuberoot-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KUBEROOT_CLUSTER_ID: "docker-local"
+      DATABASE_URL: "postgresql://kuberoot:kuberoot_local@postgres:5432/kuberoot"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: kuberoot-web
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_BASE: "http://localhost:8080"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,8 @@
+.git
+.gitignore
+.DS_Store
+*.log
+/kuberoot
+/web/dist
+/web/node_modules
+/web/.env

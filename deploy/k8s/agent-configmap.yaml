@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuberoot-agent-config
+  namespace: kuberoot
+data:
+  KUBEROOT_BACKEND_URL: http://kuberoot-backend.kuberoot.svc.cluster.local:8080
+  KUBEROOT_POLL_INTERVAL: 60s
+  KUBEROOT_CLUSTER_ID: acme-staging-eks

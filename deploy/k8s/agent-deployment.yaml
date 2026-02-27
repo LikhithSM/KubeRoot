@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuberoot-agent
+  namespace: kuberoot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kuberoot-agent
+  template:
+    metadata:
+      labels:
+        app: kuberoot-agent
+    spec:
+      serviceAccountName: kuberoot-agent
+      containers:
+        - name: agent
+          image: kuberoot-agent:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KUBEROOT_BACKEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: kuberoot-agent-config
+                  key: KUBEROOT_BACKEND_URL
+            - name: KUBEROOT_POLL_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: kuberoot-agent-config
+                  key: KUBEROOT_POLL_INTERVAL
+            - name: KUBEROOT_CLUSTER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: kuberoot-agent-config
+                  key: KUBEROOT_CLUSTER_ID
+            - name: KUBEROOT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kuberoot-agent-secret
+                  key: KUBEROOT_API_KEY
+          args:
+            - --backend=$(KUBEROOT_BACKEND_URL)
+            - --api-key=$(KUBEROOT_API_KEY)
+            - --cluster-id=$(KUBEROOT_CLUSTER_ID)
+            - --poll-interval=$(KUBEROOT_POLL_INTERVAL)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
