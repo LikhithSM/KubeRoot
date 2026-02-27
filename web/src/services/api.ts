@@ -1,7 +1,7 @@
 import { Diagnosis } from '../types/index';
 
-// Use the Vercel serverless proxy at runtime (same-origin) to avoid client-side DNS filtering.
-const API_BASE = '';
+// Use direct backend endpoint (Railway) – proxy not needed because CORS and auth are handled server-side.
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 const CLUSTER_ID = import.meta.env.VITE_CLUSTER_ID || 'demo-cluster';
 
@@ -28,8 +28,10 @@ export async function fetchDiagnosesHistory(params?: {
     if (params?.until) queryParams.append('until', params.until);
 
     const query = queryParams.toString();
-    // route through the same-origin Vercel proxy
-    const url = query ? `${API_BASE}/api/history?${query}` : `${API_BASE}/api/history`;
+    // call backend directly (railway) using the `/diagnose/history` path
+    const url = query
+      ? `${API_BASE}/diagnose/history?${query}`
+      : `${API_BASE}/diagnose/history`;
 
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
