@@ -1,8 +1,40 @@
+# Git
 .git
 .gitignore
+.github
+
+# Local/IDE
 .DS_Store
+.vscode
+.idea
 *.log
+*.swp
+*.swo
+*~
+
+# Build artifacts
 /kuberoot
+/kuberoot.exe
+
+# Web app (not needed for backend build)
+/web
 /web/dist
 /web/node_modules
 /web/.env
+/web/.env.local
+
+# Kubernetes deployment files (not needed for backend build)
+/deploy
+
+# Documentation
+*.md
+LICENSE
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Node/npm
+package-lock.json
+yarn.lock
+npm-debug.log

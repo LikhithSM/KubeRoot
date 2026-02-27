@@ -1,0 +1,17 @@
+# Railway.app Configuration
+# This tells Railway to build ONLY the backend service
+
+[build]
+# Use the Dockerfile at repo root
+dockerfile = "Dockerfile"
+# Don't auto-detect - use our explicit Dockerfile
+buildCommand = ""
+
+[deploy]
+# Start command for the backend binary
+startCommand = "kuberoot"
+# Health check endpoint (Railway will use this)
+healthcheckUrl = "http://localhost:8080/health"
+# Restart policy
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

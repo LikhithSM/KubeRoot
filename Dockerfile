@@ -6,7 +6,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -o kuberoot ./cmd/server
+# Build backend only - pure Go, no CGO needed
+# CGO=0 disables C bindings (pq driver works fine without it)
+# Let Go auto-detect GOOS/GOARCH from base image
+RUN CGO_ENABLED=0 go build -o kuberoot ./cmd/server
 
 FROM debian:bookworm-slim
 
