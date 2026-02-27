@@ -43,6 +43,12 @@ func (h *Handler) DiagnoseHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// cluster override allows SaaS frontend to request a specific cluster
+	clusterID := h.clusterID
+	if q := strings.TrimSpace(r.URL.Query().Get("cluster")); q != "" {
+		clusterID = q
+	}
+
 	filter := store.DiagnosisHistoryFilter{Limit: 50}
 	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
 		parsedLimit, err := strconv.Atoi(rawLimit)
@@ -90,14 +96,14 @@ func (h *Handler) DiagnoseHistory(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	history, err := h.store.ListDiagnoses(ctx, orgID, h.clusterID, filter)
+	history, err := h.store.ListDiagnoses(ctx, orgID, clusterID, filter)
 	if err != nil {
 		http.Error(w, "failed to load diagnosis history: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	response := DiagnoseHistoryResponse{
-		Cluster: h.clusterID,
+		Cluster: clusterID,
 		Count:   len(history),
 		Items:   history,
 	}

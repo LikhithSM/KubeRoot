@@ -245,6 +245,7 @@ Base Confidence: high
 #### **Handler 2: `/diagnose/history` (Historical Query)**
 
 **Query Parameters**:
+- `cluster` (string, optional): which cluster’s history to fetch. defaults to the server’s own `KUBEROOT_CLUSTER_ID` when unset, but SaaS clients should provide the target cluster ID (e.g. `?cluster=test-staging-eks`).
 - `limit` (int): Max results (default 50, max 200)
 - `failureType` (string): Filter by CrashLoopBackOff|ImagePullBackOff|OOMKilled
 - `namespace` (string): Filter by Kubernetes namespace
