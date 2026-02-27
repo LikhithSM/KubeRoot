@@ -41,6 +41,9 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS clusters (
 	id TEXT PRIMARY KEY,
 	organization_id TEXT NOT NULL,
+	first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	active BOOLEAN NOT NULL DEFAULT true,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -203,12 +206,13 @@ func (s *PostgresStore) SaveDiagnoses(ctx context.Context, organizationID, clust
 		_ = tx.Rollback()
 	}()
 
+	// Upsert cluster: set last_seen_at, maintain first_seen_at
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO clusters (id, organization_id, updated_at)
-		 VALUES ($1, $2, NOW())
+		`INSERT INTO clusters (id, organization_id, first_seen_at, last_seen_at, active)
+		 VALUES ($1, $2, NOW(), NOW(), true)
 		 ON CONFLICT (id)
-		 DO UPDATE SET organization_id = EXCLUDED.organization_id, updated_at = NOW()`,
+		 DO UPDATE SET last_seen_at = NOW(), active = true`,
 		clusterID,
 		organizationID,
 	); err != nil {
@@ -261,5 +265,21 @@ func (s *PostgresStore) SaveDiagnoses(ctx context.Context, organizationID, clust
 		return fmt.Errorf("commit tx: %w", err)
 	}
 
+	return nil
+}
+
+func (s *PostgresStore) RegisterCluster(ctx context.Context, organizationID, clusterID string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO clusters (id, organization_id, first_seen_at, last_seen_at, active)
+		 VALUES ($1, $2, NOW(), NOW(), true)
+		 ON CONFLICT (id)
+		 DO UPDATE SET last_seen_at = NOW(), active = true`,
+		clusterID,
+		organizationID,
+	)
+	if err != nil {
+		return fmt.Errorf("register cluster: %w", err)
+	}
 	return nil
 }

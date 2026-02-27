@@ -26,6 +26,12 @@ func hashAPIKey(key string) string {
 func APIKeyMiddleware(validator APIKeyValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// /health endpoint requires no authentication
+			if r.URL.Path == "/health" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			apiKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
 			if apiKey == "" {
 				http.Error(w, "missing X-API-Key header", http.StatusUnauthorized)
@@ -48,13 +54,4 @@ func APIKeyMiddleware(validator APIKeyValidator) func(http.Handler) http.Handler
 func GetOrganizationID(ctx context.Context) string {
 	orgID, _ := ctx.Value(organizationIDKey).(string)
 	return orgID
-}
-
-func LocalModeMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(r.Context(), organizationIDKey, "local-org")
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
 }

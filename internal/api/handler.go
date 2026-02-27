@@ -8,24 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/client-go/kubernetes"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"kuberoot/internal/analyzer"
 	"kuberoot/internal/auth"
-	"kuberoot/internal/k8s"
 	"kuberoot/internal/store"
 )
 
 type Handler struct {
-	clientset *kubernetes.Clientset
 	store     store.DiagnosisStore
 	clusterID string
-}
-
-type DiagnoseResponse struct {
-	Cluster  string               `json:"cluster"`
-	Failures []analyzer.Diagnosis `json:"failures"`
 }
 
 type DiagnoseHistoryResponse struct {
@@ -34,49 +24,11 @@ type DiagnoseHistoryResponse struct {
 	Items   []analyzer.Diagnosis `json:"items"`
 }
 
-func NewHandler(clientset *kubernetes.Clientset, diagnosisStore store.DiagnosisStore, clusterID string) *Handler {
+func NewHandler(diagnosisStore store.DiagnosisStore, clusterID string) *Handler {
 	return &Handler{
-		clientset: clientset,
 		store:     diagnosisStore,
 		clusterID: clusterID,
 	}
-}
-
-func (h *Handler) Diagnose(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	orgID := auth.GetOrganizationID(r.Context())
-	if orgID == "" {
-		http.Error(w, "missing organization context", http.StatusInternalServerError)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	failures, err := k8s.GetFailedPods(ctx, h.clientset)
-	if err != nil {
-		http.Error(w, "failed to inspect cluster: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	diagnoses := analyzer.DiagnoseFailures(orgID, h.clusterID, failures)
-	if err := h.store.SaveDiagnoses(ctx, orgID, h.clusterID, diagnoses); err != nil {
-		http.Error(w, "failed to persist diagnoses: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	response := DiagnoseResponse{
-		Cluster:  h.clusterID,
-		Failures: diagnoses,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (h *Handler) DiagnoseHistory(w http.ResponseWriter, r *http.Request) {
@@ -156,9 +108,9 @@ func (h *Handler) DiagnoseHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 type HealthResponse struct {
-	Status    string `json:"status"`
-	ClusterID string `json:"clusterId"`
-	Ready     bool   `json:"ready"`
+	Status  string `json:"status"`
+	Version string `json:"version"`
+	Ready   bool   `json:"ready"`
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -167,25 +119,14 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Quick liveness check: can we list pods?
-	_, err := h.clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{Limit: 1})
-
+	// Health endpoint requires no authentication
 	response := HealthResponse{
-		Status:    "ok",
-		ClusterID: h.clusterID,
-		Ready:     err == nil,
-	}
-
-	statusCode := http.StatusOK
-	if err != nil {
-		statusCode = http.StatusServiceUnavailable
-		response.Status = "degraded"
+		Status:  "ok",
+		Version: "1.0.0",
+		Ready:   true,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(response)
 }
