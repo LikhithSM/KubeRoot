@@ -65,14 +65,31 @@ postgresql://postgres:xxxxx@containers.railway.app:5432/railway
 
 | Name | Value | Source |
 |------|-------|--------|
-| `DATABASE_URL` | `postgres://...` | Auto-filled from Postgres service |
+| `DATABASE_URL` | `${{ Postgres.DATABASE_URL }}` | Use Railway template variable from Postgres service |
 | `KUBEROOT_CLUSTER_ID` | `saas-backend` | Set manually (or leave default) |
-| `PORT` | `8080` | Set by Railway (do NOT override) |
+| `PORT` | DO NOT SET | Railway injects this automatically; do NOT override |
 | `CORS_ORIGIN` | (optional) | Leave blank for now (allows all) |
 
 **No other config needed.**
 
 ---
+
+## PORT handling in your Go server
+
+Railway injects the `PORT` environment variable; do not set it manually in the dashboard. In your Go server use the following pattern to read it with a safe fallback for local development:
+
+```go
+port := os.Getenv("PORT")
+if port == "" {
+  port = "8080" // local dev fallback
+}
+
+log.Printf("Starting on :%s", port)
+http.ListenAndServe(":"+port, handler)
+```
+
+This ensures the app will work both on Railway and locally.
+
 
 ## Step 4: Deploy
 
