@@ -1,7 +1,8 @@
 import { Diagnosis } from '../types/index';
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
-const API_KEY = import.meta.env.VITE_API_KEY || 'kr_live_024940d80a1c454e98154c5b6f96a685';
+// Use the Vercel serverless proxy at runtime (same-origin) to avoid client-side DNS filtering.
+const API_BASE = '';
+const API_KEY = import.meta.env.VITE_API_KEY || '';
 const CLUSTER_ID = import.meta.env.VITE_CLUSTER_ID || 'demo-cluster';
 
 export async function fetchDiagnoses(): Promise<Diagnosis[]> {
