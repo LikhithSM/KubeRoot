@@ -1,6 +1,6 @@
 import { Diagnosis } from '../types/index';
 
-const API_BASE = import.meta.env.VITE_API_BASE || '';
+const API_BASE = import.meta.env.VITE_API_URL || '';
 const API_KEY = import.meta.env.VITE_API_KEY || 'kr_live_024940d80a1c454e98154c5b6f96a685';
 const CLUSTER_ID = import.meta.env.VITE_CLUSTER_ID || 'demo-cluster';
 
