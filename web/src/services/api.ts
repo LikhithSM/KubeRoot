@@ -1,20 +1,16 @@
-import { Diagnosis, DiagnoseResponse } from '../types/index';
+import { Diagnosis } from '../types/index';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
+const API_KEY = import.meta.env.VITE_API_KEY || 'kr_live_024940d80a1c454e98154c5b6f96a685';
+const CLUSTER_ID = import.meta.env.VITE_CLUSTER_ID || 'demo-cluster';
 
 export async function fetchDiagnoses(): Promise<Diagnosis[]> {
-  try {
-    const response = await fetch(`${API_BASE}/diagnose`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data: DiagnoseResponse = await response.json();
-    return data.failures || [];
-  } catch (error) {
-    console.error('Failed to fetch diagnoses:', error);
-    return [];
-  }
+  // Legacy: queries history by cluster for SaaS deployment
+  return fetchDiagnosesHistory({ cluster: CLUSTER_ID });
 }
 
 export async function fetchDiagnosesHistory(params?: {
+  cluster?: string;
   limit?: number;
   failureType?: string;
   namespace?: string;
@@ -23,6 +19,7 @@ export async function fetchDiagnosesHistory(params?: {
 }): Promise<Diagnosis[]> {
   try {
     const queryParams = new URLSearchParams();
+    if (params?.cluster) queryParams.append('cluster', params.cluster);
     if (params?.limit) queryParams.append('limit', String(params.limit));
     if (params?.failureType) queryParams.append('failureType', params.failureType);
     if (params?.namespace) queryParams.append('namespace', params.namespace);
@@ -31,8 +28,15 @@ export async function fetchDiagnosesHistory(params?: {
 
     const query = queryParams.toString();
     const url = query ? `${API_BASE}/diagnose/history?${query}` : `${API_BASE}/diagnose/history`;
+
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+    };
+    if (API_KEY) {
+      headers['X-API-Key'] = API_KEY;
+    }
     
-    const response = await fetch(url);
+    const response = await fetch(url, { headers });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     return data.items || [];
