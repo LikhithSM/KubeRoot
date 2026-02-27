@@ -6,7 +6,7 @@ const API_KEY = import.meta.env.VITE_API_KEY || '';
 const CLUSTER_ID = import.meta.env.VITE_CLUSTER_ID || 'demo-cluster';
 
 export async function fetchDiagnoses(): Promise<Diagnosis[]> {
-  // Legacy: queries history by cluster for SaaS deployment
+  // Queries history via the proxy (legacy cluster override applies)
   return fetchDiagnosesHistory({ cluster: CLUSTER_ID });
 }
 
@@ -28,7 +28,8 @@ export async function fetchDiagnosesHistory(params?: {
     if (params?.until) queryParams.append('until', params.until);
 
     const query = queryParams.toString();
-    const url = query ? `${API_BASE}/diagnose/history?${query}` : `${API_BASE}/diagnose/history`;
+    // route through the same-origin Vercel proxy
+    const url = query ? `${API_BASE}/api/history?${query}` : `${API_BASE}/api/history`;
 
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
