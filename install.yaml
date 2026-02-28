@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuberoot
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuberoot-agent
+  namespace: kuberoot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuberoot-agent-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events", "services", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuberoot-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: kuberoot-agent
+    namespace: kuberoot
+roleRef:
+  kind: ClusterRole
+  name: kuberoot-agent-readonly
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuberoot-agent-config
+  namespace: kuberoot
+data:
+  KUBEROOT_BACKEND_URL: https://kuberoot-production.up.railway.app
+  KUBEROOT_POLL_INTERVAL: 60s
+  KUBEROOT_CLUSTER_ID: ${KUBEROOT_CLUSTER_ID}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kuberoot-agent-secret
+  namespace: kuberoot
+type: Opaque
+stringData:
+  KUBEROOT_API_KEY: ${KUBEROOT_API_KEY}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuberoot-agent
+  namespace: kuberoot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kuberoot-agent
+  template:
+    metadata:
+      labels:
+        app: kuberoot-agent
+    spec:
+      serviceAccountName: kuberoot-agent
+      containers:
+        - name: agent
+          image: ghcr.io/likhithsm/kuberoot-agent:v1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KUBEROOT_BACKEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: kuberoot-agent-config
+                  key: KUBEROOT_BACKEND_URL
+            - name: KUBEROOT_POLL_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: kuberoot-agent-config
+                  key: KUBEROOT_POLL_INTERVAL
+            - name: KUBEROOT_CLUSTER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: kuberoot-agent-config
+                  key: KUBEROOT_CLUSTER_ID
+            - name: KUBEROOT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kuberoot-agent-secret
+                  key: KUBEROOT_API_KEY
+          args:
+            - --backend=$(KUBEROOT_BACKEND_URL)
+            - --api-key=$(KUBEROOT_API_KEY)
+            - --cluster-id=$(KUBEROOT_CLUSTER_ID)
+            - --poll-interval=$(KUBEROOT_POLL_INTERVAL)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
