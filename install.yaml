@@ -68,7 +68,7 @@ spec:
       serviceAccountName: kuberoot-agent
       containers:
         - name: agent
-          image: ghcr.io/likhithsm/kuberoot-agent:v1.0.0
+          image: likhithsm/kuberoot-agent:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: KUBEROOT_BACKEND_URL
