@@ -2,10 +2,14 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "github.com/lib/pq"
 
@@ -48,6 +52,12 @@ CREATE TABLE IF NOT EXISTS clusters (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE TABLE IF NOT EXISTS api_keys (
 	id BIGSERIAL PRIMARY KEY,
 	organization_id TEXT NOT NULL,
@@ -57,6 +67,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	last_used_at TIMESTAMPTZ
 );
+
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'legacy-key';
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash
 	ON api_keys(key_hash) WHERE active = true;
@@ -104,6 +119,60 @@ func (s *PostgresStore) ValidateAPIKey(ctx context.Context, keyHash string) (str
 	}
 
 	return organizationID, nil
+}
+
+func hashAPIKey(key string) string {
+	hash := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(hash[:])
+}
+
+func generateAPIKey() (string, error) {
+	randomBytes := make([]byte, 16)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", fmt.Errorf("generate random api key bytes: %w", err)
+	}
+
+	return "kr_live_" + hex.EncodeToString(randomBytes), nil
+}
+
+func (s *PostgresStore) CreateAPIKey(ctx context.Context, organizationID, name string) (string, error) {
+	orgID := strings.TrimSpace(organizationID)
+	if orgID == "" {
+		return "", fmt.Errorf("organization_id is required")
+	}
+
+	keyName := strings.TrimSpace(name)
+	if keyName == "" {
+		keyName = fmt.Sprintf("generated-%d", time.Now().Unix())
+	}
+
+	for attempts := 0; attempts < 3; attempts++ {
+		rawKey, err := generateAPIKey()
+		if err != nil {
+			return "", err
+		}
+
+		keyHash := hashAPIKey(rawKey)
+		_, err = s.db.ExecContext(
+			ctx,
+			`INSERT INTO api_keys (organization_id, key_hash, name, active)
+			 VALUES ($1, $2, $3, true)`,
+			orgID,
+			keyHash,
+			keyName,
+		)
+		if err == nil {
+			return rawKey, nil
+		}
+
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			continue
+		}
+
+		return "", fmt.Errorf("create api key: %w", err)
+	}
+
+	return "", fmt.Errorf("create api key: failed after retries")
 }
 
 func (s *PostgresStore) ListDiagnoses(ctx context.Context, organizationID, clusterID string, filter DiagnosisHistoryFilter) ([]analyzer.Diagnosis, error) {

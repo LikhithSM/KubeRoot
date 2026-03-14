@@ -19,5 +19,6 @@ type DiagnosisStore interface {
 	SaveDiagnoses(ctx context.Context, organizationID, clusterID string, diagnoses []analyzer.Diagnosis) error
 	ListDiagnoses(ctx context.Context, organizationID, clusterID string, filter DiagnosisHistoryFilter) ([]analyzer.Diagnosis, error)
 	ValidateAPIKey(ctx context.Context, keyHash string) (string, error)
+	CreateAPIKey(ctx context.Context, organizationID, name string) (string, error)
 	RegisterCluster(ctx context.Context, organizationID, clusterID string) error
 }

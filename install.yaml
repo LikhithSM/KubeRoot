@@ -69,7 +69,7 @@ spec:
       containers:
         - name: agent
           image: likhithsm/kuberoot-agent:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           env:
             - name: KUBEROOT_BACKEND_URL
               valueFrom:

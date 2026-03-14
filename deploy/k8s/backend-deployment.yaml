@@ -25,6 +25,11 @@ spec:
                 secretKeyRef:
                   name: kuberoot-backend-secret
                   key: DATABASE_URL
+            - name: INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kuberoot-backend-secret
+                  key: INTERNAL_API_TOKEN
             - name: KUBEROOT_CLUSTER_ID
               value: "acme-staging-eks"
           readinessProbe:

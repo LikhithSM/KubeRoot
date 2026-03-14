@@ -27,7 +27,7 @@ func APIKeyMiddleware(validator APIKeyValidator) func(http.Handler) http.Handler
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// /health endpoint requires no authentication
-			if r.URL.Path == "/health" {
+			if r.URL.Path == "/health" || r.URL.Path == "/internal/generate-key" {
 				next.ServeHTTP(w, r)
 				return
 			}

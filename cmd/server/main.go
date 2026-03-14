@@ -39,6 +39,7 @@ func main() {
 	mux.HandleFunc("/health", handler.Health)
 	mux.HandleFunc("/diagnose/history", handler.DiagnoseHistory)
 	mux.HandleFunc("/api/v1/agent/report", handler.AgentReport)
+	mux.HandleFunc("/internal/generate-key", handler.GenerateAPIKey)
 	// NOTE: /diagnose removed - not available in SaaS mode (only agent-pushed data)
 
 	// Apply middleware stack in reverse order (innermost first)
