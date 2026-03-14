@@ -11,24 +11,36 @@ export function Dashboard() {
   const [selectedDiagnosis, setSelectedDiagnosis] = useState<Diagnosis | null>(null);
   const [filters, setFilters] = useState<{ namespace?: string; type?: string; confidence?: string }>({});
 
-  const uniqueNamespaces = useMemo(() => {
-    const ns = new Set(diagnoses.map((d) => d.namespace));
-    return Array.from(ns).sort();
+  // Deduplicate: keep only the latest entry per (namespace, podName, failureType).
+  // The API returns records newest-first, so the first occurrence of each key is the most recent.
+  const activeDiagnoses = useMemo(() => {
+    const seen = new Set<string>();
+    return diagnoses.filter((d) => {
+      const key = `${d.namespace}/${d.podName}/${d.failureType}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }, [diagnoses]);
 
+  const uniqueNamespaces = useMemo(() => {
+    const ns = new Set(activeDiagnoses.map((d) => d.namespace));
+    return Array.from(ns).sort();
+  }, [activeDiagnoses]);
+
   const uniqueTypes = useMemo(() => {
-    const types = new Set(diagnoses.map((d) => d.failureType));
+    const types = new Set(activeDiagnoses.map((d) => d.failureType));
     return Array.from(types).sort();
-  }, [diagnoses]);
+  }, [activeDiagnoses]);
 
   const stats = useMemo(() => {
     return {
-      total: diagnoses.length,
-      high: diagnoses.filter((d) => d.confidence === 'high').length,
-      medium: diagnoses.filter((d) => d.confidence === 'medium').length,
-      low: diagnoses.filter((d) => d.confidence === 'low').length,
+      total: activeDiagnoses.length,
+      high: activeDiagnoses.filter((d) => d.confidence === 'high').length,
+      medium: activeDiagnoses.filter((d) => d.confidence === 'medium').length,
+      low: activeDiagnoses.filter((d) => d.confidence === 'low').length,
     };
-  }, [diagnoses]);
+  }, [activeDiagnoses]);
 
   const lastUpdated = useMemo(() => format(new Date(), 'HH:mm:ss'), [diagnoses]);
   const activeCluster = diagnoses[0]?.clusterId || 'unassigned';
@@ -119,11 +131,11 @@ export function Dashboard() {
                     <p className="text-sm text-gray-500">Live diagnoses from agent reports</p>
                   </div>
                   <span className="text-xs text-gray-500 uppercase tracking-wider">
-                    {diagnoses.length} failures - Updated {lastUpdated}
+                    {activeDiagnoses.length} failures - Updated {lastUpdated}
                   </span>
                 </div>
                 <FailureTable
-                  diagnoses={diagnoses}
+                  diagnoses={activeDiagnoses}
                   filters={filters}
                   onSelectRow={setSelectedDiagnosis}
                 />
