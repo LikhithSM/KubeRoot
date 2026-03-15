@@ -119,50 +119,16 @@ var v1Rules = []Rule{
 }
 
 func DiagnoseFailures(orgID, clusterID string, failures []k8s.PodFailure) []Diagnosis {
-	ruleMap := make(map[string]Rule, len(v1Rules))
-	for _, rule := range v1Rules {
-		ruleMap[rule.FailureType] = rule
-	}
+	engine := NewDiagnosisEngine(v1Rules)
 
 	out := make([]Diagnosis, 0, len(failures))
 	for _, failure := range failures {
 		for _, failureType := range failure.Types {
-			rule, exists := ruleMap[failureType]
-			if !exists {
+			diagnosis, ok := engine.Diagnose(orgID, clusterID, failure, failureType)
+			if !ok {
 				continue
 			}
-
-			evidence := buildEvidence(failureType, failure)
-			ctx := buildContextSignals(failure)
-			likelyCause := deriveLikelyCause(rule.LikelyCause, failureType, failure, evidence)
-			fixSuggestions := buildFixSuggestions(failureType, failure, evidence)
-			suggestedFix := deriveSuggestedFix(rule.SuggestedFix, failureType, failure, evidence, fixSuggestions)
-			quickCommands := buildQuickCommands(failureType, failure, evidence)
-			confidence, confidenceNote := enrichConfidence(rule.Confidence, failureType, failure, evidence)
-			severity := computeSeverity(confidence, failureType, failure)
-
-			out = append(out, Diagnosis{
-				OrganizationID: orgID,
-				ClusterID:      clusterID,
-				PodName:        failure.Name,
-				Namespace:      failure.Namespace,
-				Container:      failure.Container,
-				Image:          failure.Image,
-				RestartCount:   failure.RestartCount,
-				FailureType:    rule.FailureType,
-				Category:       categorizeFailure(rule.FailureType),
-				Severity:       severity,
-				LikelyCause:    likelyCause,
-				SuggestedFix:   suggestedFix,
-				Confidence:     confidence,
-				ConfidenceNote: confidenceNote,
-				Evidence:       evidence,
-				FixSuggestions: fixSuggestions,
-				QuickCommands:  quickCommands,
-				Context:        ctx,
-				Events:         failure.Events,
-				Timestamp:      time.Now().UTC(),
-			})
+			out = append(out, diagnosis)
 		}
 	}
 
