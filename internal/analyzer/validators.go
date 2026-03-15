@@ -49,12 +49,15 @@ func (v SecretValidator) Validate(signal PodSignal, ctx WorkloadContext) *Diagno
 func (v ServiceDependencyValidator) Name() string { return "service-dependency-validator" }
 
 func (v ServiceDependencyValidator) Validate(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
-	if signal.FailureType == "DNSLookupFailed" || signal.FailureType == "NetworkTimeout" {
+	if signal.FailureType == "DNSLookupFailed" || signal.FailureType == "ImageRegistryDNSFailure" || signal.FailureType == "NetworkTimeout" {
 		return &DiagnosisDecision{FailureType: signal.FailureType}
 	}
 
 	combined := strings.ToLower(strings.Join(append([]string{signal.Message}, signal.Events...), "\n"))
 	if (strings.Contains(combined, "lookup") && strings.Contains(combined, "no such host")) || strings.Contains(combined, "temporary failure in name resolution") {
+		if isRegistryDNSPattern(combined) {
+			return &DiagnosisDecision{FailureType: "ImageRegistryDNSFailure"}
+		}
 		return &DiagnosisDecision{FailureType: "DNSLookupFailed"}
 	}
 	if strings.Contains(combined, "i/o timeout") || strings.Contains(combined, "connection timed out") || strings.Contains(combined, "context deadline exceeded") {
@@ -62,4 +65,17 @@ func (v ServiceDependencyValidator) Validate(signal PodSignal, _ WorkloadContext
 	}
 
 	return nil
+}
+
+func isRegistryDNSPattern(text string) bool {
+	if strings.Contains(text, "pull") && strings.Contains(text, "image") {
+		return true
+	}
+	if strings.Contains(text, "errimagepull") || strings.Contains(text, "imagepullbackoff") {
+		return true
+	}
+	if strings.Contains(text, "registry") {
+		return true
+	}
+	return false
 }

@@ -1,7 +1,6 @@
 package analyzer
 
 import (
-	"log"
 	"time"
 
 	"kuberoot/internal/k8s"
@@ -37,7 +36,6 @@ func NewDiagnosisEngine(baseRules []Rule) *DiagnosisEngine {
 func (e *DiagnosisEngine) Diagnose(orgID, clusterID string, failure k8s.PodFailure, failureType string) (Diagnosis, bool) {
 	signal := buildPodSignal(failureType, failure)
 	ctx := buildWorkloadContext(failure)
-	log.Printf("Context: %+v", ctx)
 
 	for _, validator := range e.validators {
 		if decision := validator.Validate(signal, ctx); decision != nil {

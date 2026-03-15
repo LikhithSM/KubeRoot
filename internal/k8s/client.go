@@ -41,6 +41,7 @@ const (
 	FailureSecretMissing    FailureType = "SecretMissing"
 	FailurePodPending       FailureType = "PodPending"
 	FailureDNSLookup        FailureType = "DNSLookupFailed"
+	FailureImageRegistryDNS FailureType = "ImageRegistryDNSFailure"
 	FailureNetworkTimeout   FailureType = "NetworkTimeout"
 	FailureRolloutFailed    FailureType = "DeploymentRolloutFailed"
 )
@@ -227,6 +228,9 @@ func DetectFailures(pod corev1.Pod) []PodFailure {
 			if cs.LastTerminationState.Terminated != nil {
 				lastTerminationReason = cs.LastTerminationState.Terminated.Reason
 				lastExitCode = cs.LastTerminationState.Terminated.ExitCode
+				if lastTerminationReason == "OOMKilled" || lastExitCode == 137 {
+					types = appendType(types, string(FailureOOMKilled))
+				}
 			}
 
 			if len(types) > 0 {
@@ -491,7 +495,11 @@ func enrichFailureWithEventSignals(failure *PodFailure) {
 		}
 
 		if strings.Contains(lower, "lookup") && strings.Contains(lower, "no such host") {
-			failure.Types = appendType(failure.Types, string(FailureDNSLookup))
+			if isImagePullDNSFailure(lower) {
+				failure.Types = appendType(failure.Types, string(FailureImageRegistryDNS))
+			} else {
+				failure.Types = appendType(failure.Types, string(FailureDNSLookup))
+			}
 		}
 		if strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "connection timed out") || strings.Contains(lower, "context deadline exceeded") {
 			failure.Types = appendType(failure.Types, string(FailureNetworkTimeout))
@@ -519,6 +527,19 @@ func removeType(types []string, t string) []string {
 		}
 	}
 	return out
+}
+
+func isImagePullDNSFailure(eventLower string) bool {
+	if strings.Contains(eventLower, "pull") && strings.Contains(eventLower, "image") {
+		return true
+	}
+	if strings.Contains(eventLower, "errimagepull") || strings.Contains(eventLower, "imagepullbackoff") {
+		return true
+	}
+	if strings.Contains(eventLower, "registry") {
+		return true
+	}
+	return false
 }
 
 func getRecentPodEvents(ctx context.Context, cs *kubernetes.Clientset, namespace, podName string, limit int) ([]string, error) {

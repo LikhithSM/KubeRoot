@@ -105,6 +105,12 @@ var v1Rules = []Rule{
 		Confidence:   "high",
 	},
 	{
+		FailureType:  "ImageRegistryDNSFailure",
+		LikelyCause:  "Node/container runtime failed to resolve registry hostname while pulling image",
+		SuggestedFix: "Verify registry DNS host and node DNS/proxy configuration",
+		Confidence:   "high",
+	},
+	{
 		FailureType:  "NetworkTimeout",
 		LikelyCause:  "Application timed out reaching a dependency",
 		SuggestedFix: "Check service endpoints, network policies, and destination availability",
@@ -235,6 +241,11 @@ func enrichConfidence(base, failureType string, failure k8s.PodFailure, evidence
 				evidenceScore = maxInt(evidenceScore, 1)
 				reasons = append(reasons, "dns lookup failure observed in events")
 			}
+		case "ImageRegistryDNSFailure":
+			if strings.Contains(lowerEvent, "lookup") && strings.Contains(lowerEvent, "no such host") {
+				evidenceScore = maxInt(evidenceScore, 1)
+				reasons = append(reasons, "registry dns lookup failure observed during image pull")
+			}
 		case "NetworkTimeout":
 			if strings.Contains(lowerEvent, "i/o timeout") || strings.Contains(lowerEvent, "connection timed out") || strings.Contains(lowerEvent, "context deadline exceeded") {
 				evidenceScore = maxInt(evidenceScore, 1)
@@ -300,6 +311,8 @@ func computeSeverity(confidence, failureType string, failure k8s.PodFailure) str
 	case "ConfigMapMissing", "SecretMissing":
 		score += 1
 	case "DNSLookupFailed", "NetworkTimeout":
+		score += 1
+	case "ImageRegistryDNSFailure":
 		score += 1
 	case "DeploymentRolloutFailed":
 		score += 2
@@ -447,6 +460,10 @@ func buildEvidence(failureType string, failure k8s.PodFailure) []string {
 			if strings.Contains(lower, "progress deadline exceeded") || strings.Contains(lower, "timed out progressing") {
 				evidence = append(evidence, "Rollout timeout event: "+event)
 			}
+		case "ImageRegistryDNSFailure":
+			if strings.Contains(lower, "lookup") && strings.Contains(lower, "no such host") {
+				evidence = append(evidence, "Registry DNS resolution failure: "+event)
+			}
 		}
 
 		if strings.Contains(lower, "lookup") && strings.Contains(lower, "no such host") {
@@ -537,6 +554,11 @@ func deriveLikelyCause(defaultCause, failureType string, failure k8s.PodFailure,
 				return "Missing registry credentials or repository permission for image pull"
 			}
 		}
+	case "ImageRegistryDNSFailure":
+		if failure.Image != "" {
+			return "Container runtime could not resolve registry host while pulling image " + failure.Image
+		}
+		return "Container runtime could not resolve image registry hostname during pull"
 	case "CrashLoopBackOff":
 		combined := strings.ToLower(strings.Join(append([]string{failure.Message}, failure.Events...), "\n"))
 		if strings.Contains(combined, "econnrefused") || strings.Contains(combined, "connection refused") {
@@ -693,6 +715,8 @@ func deriveSuggestedFix(defaultFix, failureType string, failure k8s.PodFailure, 
 		return "Run: kubectl -n " + ns + " describe pod " + pod + "\n\nLook for volume mount errors, scheduling failures, or missing resources."
 	case "DNSLookupFailed":
 		return "1. Verify the dependency hostname exists as a Kubernetes Service\n2. Check DNS suffix and namespace (svc.cluster.local)\n3. Validate CoreDNS health and pod DNS config"
+	case "ImageRegistryDNSFailure":
+		return "1. Verify registry hostname in image reference\n2. Validate node DNS can resolve the registry host\n3. Check proxy/firewall egress to registry"
 	case "NetworkTimeout":
 		return "1. Check endpoints for the target Service\n2. Validate NetworkPolicies allow traffic\n3. Ensure destination pods are healthy and listening"
 	case "DeploymentRolloutFailed":
@@ -870,6 +894,19 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 				Command:     "DATABASE_HOST=postgres.default.svc.cluster.local",
 			},
 		}
+	case "ImageRegistryDNSFailure":
+		return []FixSuggestion{
+			{
+				Title:       "Verify image registry hostname",
+				Explanation: "Ensure the image reference uses a valid and resolvable registry host.",
+				Command:     "kubectl -n " + ns + " describe pod " + pod,
+			},
+			{
+				Title:       "Check DNS from a cluster node",
+				Explanation: "Confirm cluster/node DNS can resolve the registry domain used in the image.",
+				Command:     "nslookup <registry-hostname>",
+			},
+		}
 	case "NetworkTimeout":
 		return []FixSuggestion{
 			{
@@ -931,6 +968,8 @@ func categorizeFailure(failureType string) string {
 		return "Resource constraint"
 	case "DNSLookupFailed", "NetworkTimeout":
 		return "Connectivity"
+	case "ImageRegistryDNSFailure":
+		return "Registry error"
 	case "DeploymentRolloutFailed":
 		return "Rollout"
 	case "ReadinessProbeFailed", "LivenessProbeFailed":
@@ -982,6 +1021,11 @@ func buildQuickCommands(failureType string, failure k8s.PodFailure, evidence []s
 		commands = append(commands,
 			"kubectl -n "+ns+" get svc",
 			"kubectl -n "+ns+" get endpoints",
+		)
+	case "ImageRegistryDNSFailure":
+		commands = append(commands,
+			"kubectl -n "+ns+" describe pod "+pod,
+			"nslookup <registry-hostname>",
 		)
 	case "NetworkTimeout":
 		commands = append(commands,

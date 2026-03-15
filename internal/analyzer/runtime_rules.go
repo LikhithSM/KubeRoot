@@ -1,5 +1,7 @@
 package analyzer
 
+import "strings"
+
 type runtimeRuleFunc struct {
 	evaluate func(signal PodSignal, ctx WorkloadContext) *DiagnosisDecision
 }
@@ -26,10 +28,14 @@ func detectImagePull(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
 }
 
 func detectOOM(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
-	if signal.FailureType != "OOMKilled" {
-		return nil
+	if signal.FailureType == "OOMKilled" || signal.ExitCode == 137 {
+		return &DiagnosisDecision{FailureType: "OOMKilled"}
 	}
-	return &DiagnosisDecision{FailureType: "OOMKilled"}
+	combined := strings.ToLower(strings.Join(append([]string{signal.Message}, signal.Events...), "\n"))
+	if strings.Contains(combined, "oomkilled") || strings.Contains(combined, "out of memory") {
+		return &DiagnosisDecision{FailureType: "OOMKilled"}
+	}
+	return nil
 }
 
 func detectProbeFailure(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
