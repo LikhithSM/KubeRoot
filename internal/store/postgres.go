@@ -552,8 +552,9 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 
 func buildFailureTimeline(f CurrentFailure) []string {
 	lines := []string{
-		fmt.Sprintf("%s first seen", f.FirstSeen.UTC().Format("15:04")),
-		fmt.Sprintf("%s latest observation", f.LastSeen.UTC().Format("15:04")),
+		fmt.Sprintf("Detected: %s", f.FirstSeen.UTC().Format("15:04")),
+		fmt.Sprintf("Last observed: %s", f.LastSeen.UTC().Format("15:04")),
+		fmt.Sprintf("Duration: %d minutes", int(f.DurationSeconds/60)),
 	}
 
 	if f.DurationSeconds <= 10*60 {

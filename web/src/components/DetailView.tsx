@@ -6,16 +6,45 @@ interface DetailViewProps {
   timeline?: string[];
   firstSeen?: string;
   lastSeen?: string;
+  occurrences?: number;
+  durationSeconds?: number;
   onClose: () => void;
 }
 
-export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, onClose }: DetailViewProps) {
+export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, occurrences, durationSeconds, onClose }: DetailViewProps) {
   if (!diagnosis) return null;
 
   const evidence = diagnosis.evidence || [];
   const fixSuggestions = diagnosis.fixSuggestions || [];
   const quickCommands = diagnosis.quickCommands || [];
   const contextSignals = diagnosis.context || [];
+  const replicasLine = contextSignals.find((c) => c.startsWith('Replicas: '));
+
+  const impactSummary = (() => {
+    const lines: string[] = [];
+    lines.push('1 pod currently failing for this issue.');
+    if (typeof occurrences === 'number' && occurrences > 1) {
+      lines.push(`Observed ${occurrences} times.`);
+    }
+    if (typeof durationSeconds === 'number' && durationSeconds > 0) {
+      lines.push(`Active for ${Math.max(1, Math.floor(durationSeconds / 60))} minutes.`);
+    }
+    if (replicasLine) {
+      const m = replicasLine.match(/Replicas:\s*(\d+)\/(\d+)/);
+      if (m) {
+        const ready = Number(m[1]);
+        const desired = Number(m[2]);
+        if (!Number.isNaN(ready) && !Number.isNaN(desired) && desired > 0) {
+          if (ready < desired) {
+            lines.push(`Service impact: deployment degraded (${ready}/${desired} ready).`);
+          } else {
+            lines.push('Service impact: no replica degradation detected.');
+          }
+        }
+      }
+    }
+    return lines;
+  })();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-5 z-50">
@@ -93,6 +122,17 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, onClose }
               )}
             </div>
           )}
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Impact
+            </label>
+            <div className="bg-rose-50 border border-rose-200 rounded-lg p-4 space-y-2">
+              {impactSummary.map((line, idx) => (
+                <p key={idx} className="text-sm text-rose-900">{line}</p>
+              ))}
+            </div>
+          </div>
 
           {evidence.length > 0 && (
             <div>

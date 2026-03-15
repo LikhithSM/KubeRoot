@@ -199,6 +199,8 @@ export function Dashboard() {
           timeline={selectedCurrentIssue?.timeline}
           firstSeen={selectedCurrentIssue?.firstSeen}
           lastSeen={selectedCurrentIssue?.lastSeen}
+          occurrences={selectedCurrentIssue?.occurrences}
+          durationSeconds={selectedCurrentIssue?.durationSeconds}
           onClose={() => {
             setSelectedDiagnosis(null);
             setSelectedCurrentIssue(null);

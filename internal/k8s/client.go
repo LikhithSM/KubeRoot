@@ -47,6 +47,12 @@ type PodFailure struct {
 	Name                  string
 	Container             string // container name (if applicable)
 	Image                 string
+	Deployment            string
+	ReplicaStatus         string
+	Services              []string
+	ConfigMaps            []string
+	Secrets               []string
+	EnvVariables          []string
 	Types                 []string // one or more of the above failure types
 	Message               string   // optional: short message we can print now; events on Day 4
 	Events                []string
@@ -276,10 +282,153 @@ func GetFailedPods(ctx context.Context, cs *kubernetes.Clientset) ([]PodFailure,
 		for i := range failures {
 			failures[i].Events = recentEvents
 			enrichFailureWithEventSignals(&failures[i])
+			enrichFailureWithWorkloadContext(ctx, cs, p, &failures[i])
 		}
 		out = append(out, failures...)
 	}
 	return out, nil
+}
+
+func enrichFailureWithWorkloadContext(ctx context.Context, cs *kubernetes.Clientset, pod corev1.Pod, failure *PodFailure) {
+	if failure == nil {
+		return
+	}
+
+	failure.Deployment, failure.ReplicaStatus = resolveDeploymentStatus(ctx, cs, pod)
+	failure.Services = listMatchingServices(ctx, cs, pod)
+	failure.ConfigMaps, failure.Secrets, failure.EnvVariables = collectPodConfigRefs(pod, failure.Container)
+}
+
+func resolveDeploymentStatus(ctx context.Context, cs *kubernetes.Clientset, pod corev1.Pod) (string, string) {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind == "Deployment" {
+			dep, err := cs.AppsV1().Deployments(pod.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
+			if err != nil {
+				return owner.Name, ""
+			}
+			desired := int32(1)
+			if dep.Spec.Replicas != nil {
+				desired = *dep.Spec.Replicas
+			}
+			return owner.Name, fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, desired)
+		}
+		if owner.Kind == "ReplicaSet" {
+			rs, err := cs.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
+			if err != nil {
+				return "", ""
+			}
+			for _, rsOwner := range rs.OwnerReferences {
+				if rsOwner.Kind == "Deployment" {
+					dep, depErr := cs.AppsV1().Deployments(pod.Namespace).Get(ctx, rsOwner.Name, metav1.GetOptions{})
+					if depErr != nil {
+						return rsOwner.Name, ""
+					}
+					desired := int32(1)
+					if dep.Spec.Replicas != nil {
+						desired = *dep.Spec.Replicas
+					}
+					return rsOwner.Name, fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, desired)
+				}
+			}
+		}
+	}
+
+	return "", ""
+}
+
+func listMatchingServices(ctx context.Context, cs *kubernetes.Clientset, pod corev1.Pod) []string {
+	if len(pod.Labels) == 0 {
+		return nil
+	}
+
+	svcs, err := cs.CoreV1().Services(pod.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil
+	}
+
+	matches := make([]string, 0, 4)
+	for _, svc := range svcs.Items {
+		if len(svc.Spec.Selector) == 0 {
+			continue
+		}
+		ok := true
+		for k, v := range svc.Spec.Selector {
+			if podVal, exists := pod.Labels[k]; !exists || podVal != v {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			matches = append(matches, svc.Name)
+		}
+	}
+
+	sort.Strings(matches)
+	return matches
+}
+
+func collectPodConfigRefs(pod corev1.Pod, targetContainer string) ([]string, []string, []string) {
+	configMaps := make(map[string]struct{})
+	secrets := make(map[string]struct{})
+	envVars := make(map[string]struct{})
+
+	for _, vol := range pod.Spec.Volumes {
+		if vol.ConfigMap != nil && strings.TrimSpace(vol.ConfigMap.Name) != "" {
+			configMaps[vol.ConfigMap.Name] = struct{}{}
+		}
+		if vol.Secret != nil && strings.TrimSpace(vol.Secret.SecretName) != "" {
+			secrets[vol.Secret.SecretName] = struct{}{}
+		}
+	}
+
+	containers := pod.Spec.Containers
+	for _, c := range containers {
+		if targetContainer != "" && c.Name != targetContainer {
+			continue
+		}
+		for _, env := range c.Env {
+			if strings.TrimSpace(env.Name) != "" {
+				envVars[env.Name] = struct{}{}
+			}
+			if env.ValueFrom != nil {
+				if env.ValueFrom.ConfigMapKeyRef != nil && strings.TrimSpace(env.ValueFrom.ConfigMapKeyRef.Name) != "" {
+					configMaps[env.ValueFrom.ConfigMapKeyRef.Name] = struct{}{}
+				}
+				if env.ValueFrom.SecretKeyRef != nil && strings.TrimSpace(env.ValueFrom.SecretKeyRef.Name) != "" {
+					secrets[env.ValueFrom.SecretKeyRef.Name] = struct{}{}
+				}
+			}
+		}
+		for _, envFrom := range c.EnvFrom {
+			if envFrom.ConfigMapRef != nil && strings.TrimSpace(envFrom.ConfigMapRef.Name) != "" {
+				configMaps[envFrom.ConfigMapRef.Name] = struct{}{}
+			}
+			if envFrom.SecretRef != nil && strings.TrimSpace(envFrom.SecretRef.Name) != "" {
+				secrets[envFrom.SecretRef.Name] = struct{}{}
+			}
+		}
+	}
+
+	if targetContainer != "" && len(envVars) == 0 {
+		for _, c := range containers {
+			for _, env := range c.Env {
+				if strings.TrimSpace(env.Name) != "" {
+					envVars[env.Name] = struct{}{}
+				}
+			}
+		}
+	}
+
+	return mapKeys(configMaps), mapKeys(secrets), mapKeys(envVars)
+}
+
+func mapKeys(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func appendType(types []string, t string) []string {

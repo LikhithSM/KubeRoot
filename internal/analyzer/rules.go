@@ -403,6 +403,16 @@ func buildEvidence(failureType string, failure k8s.PodFailure) []string {
 				evidence = append(evidence, "Volume mount failure: "+event)
 			}
 		}
+
+		if strings.Contains(lower, "lookup") && strings.Contains(lower, "no such host") {
+			evidence = append(evidence, "DNS lookup failure: "+event)
+		}
+		if strings.Contains(lower, "connection refused") || strings.Contains(lower, "econnrefused") {
+			evidence = append(evidence, "Connection refused: "+event)
+		}
+		if strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "connection timed out") || strings.Contains(lower, "context deadline exceeded") {
+			evidence = append(evidence, "Network timeout: "+event)
+		}
 	}
 
 	if len(failure.Events) > 0 {
@@ -430,12 +440,34 @@ func extractQuoted(text, keyword string) string {
 }
 
 func buildContextSignals(failure k8s.PodFailure) []string {
-	context := make([]string, 0, 2)
+	context := make([]string, 0, 8)
 	if failure.RecentRollout {
 		context = append(context, "Pod appears recently created (possible rollout impact)")
 	}
 	if failure.PodAgeSeconds > 0 {
 		context = append(context, "Pod age: "+formatAge(failure.PodAgeSeconds))
+	}
+	if failure.Deployment != "" {
+		context = append(context, "Deployment: "+failure.Deployment)
+	}
+	if failure.ReplicaStatus != "" {
+		context = append(context, "Replicas: "+failure.ReplicaStatus+" ready")
+	}
+	if len(failure.Services) > 0 {
+		context = append(context, "Services: "+strings.Join(failure.Services, ", "))
+	}
+	if len(failure.ConfigMaps) > 0 {
+		context = append(context, "ConfigMaps: "+strings.Join(failure.ConfigMaps, ", "))
+	}
+	if len(failure.Secrets) > 0 {
+		context = append(context, "Secrets: "+strings.Join(failure.Secrets, ", "))
+	}
+	if len(failure.EnvVariables) > 0 {
+		maxEnv := len(failure.EnvVariables)
+		if maxEnv > 8 {
+			maxEnv = 8
+		}
+		context = append(context, "Env vars: "+strings.Join(failure.EnvVariables[:maxEnv], ", "))
 	}
 	return context
 }
@@ -455,6 +487,19 @@ func deriveLikelyCause(defaultCause, failureType string, failure k8s.PodFailure,
 			}
 		}
 	case "CrashLoopBackOff":
+		combined := strings.ToLower(strings.Join(append([]string{failure.Message}, failure.Events...), "\n"))
+		if strings.Contains(combined, "econnrefused") || strings.Contains(combined, "connection refused") {
+			if len(failure.Services) > 0 {
+				return "Application cannot connect to service " + failure.Services[0] + " (connection refused)"
+			}
+			return "Application cannot connect to dependency (connection refused)"
+		}
+		if (strings.Contains(combined, "lookup") && strings.Contains(combined, "no such host")) || strings.Contains(combined, "temporary failure in name resolution") {
+			return "Application failed DNS lookup for a dependent service"
+		}
+		if strings.Contains(combined, "i/o timeout") || strings.Contains(combined, "connection timed out") || strings.Contains(combined, "context deadline exceeded") {
+			return "Application cannot reach dependency due to network timeout"
+		}
 		if failure.ExitCode != 0 || failure.LastExitCode != 0 {
 			code := failure.ExitCode
 			if code == 0 {
@@ -601,7 +646,7 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 					FixSuggestion{
 						Title:       "Add registry credentials",
 						Explanation: "Create a Docker registry secret in the failing namespace.",
-						Command:     "kubectl create secret docker-registry regcred \\\n+  --docker-server=docker.io \\\n+  --docker-username=<user> \\\n+  --docker-password=<password> \\\n+  -n " + ns,
+						Command:     "kubectl create secret docker-registry regcred \\\n  --docker-server=docker.io \\\n  --docker-username=<user> \\\n  --docker-password=<password> \\\n+  -n " + ns,
 					},
 					FixSuggestion{
 						Title:       "Attach imagePullSecrets",
@@ -622,7 +667,7 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 			{
 				Title:       "Create the missing ConfigMap",
 				Explanation: "Create the ConfigMap that the Deployment is already referencing.",
-				Command:     "kubectl create configmap " + name + " \\\n+  --from-env-file=config.env \\\n+  -n " + ns,
+				Command:     "kubectl create configmap " + name + " \\\n  --from-env-file=config.env \\\n+  -n " + ns,
 			},
 			{
 				Title:       "Verify the reference name",
@@ -639,7 +684,7 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 			{
 				Title:       "Create the missing Secret",
 				Explanation: "Create the Secret that the Deployment expects in this namespace.",
-				Command:     "kubectl create secret generic " + name + " \\\n+  --from-literal=password=<value> \\\n+  -n " + ns,
+				Command:     "kubectl create secret generic " + name + " \\\n  --from-literal=password=<value> \\\n+  -n " + ns,
 			},
 			{
 				Title:       "Verify the secret reference",
