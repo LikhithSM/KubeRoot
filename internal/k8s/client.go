@@ -42,6 +42,7 @@ const (
 	FailurePodPending       FailureType = "PodPending"
 	FailureDNSLookup        FailureType = "DNSLookupFailed"
 	FailureNetworkTimeout   FailureType = "NetworkTimeout"
+	FailureRolloutFailed    FailureType = "DeploymentRolloutFailed"
 )
 
 type PodFailure struct {
@@ -50,11 +51,13 @@ type PodFailure struct {
 	Container             string // container name (if applicable)
 	Image                 string
 	Deployment            string
+	DeploymentRevision    string
 	ReplicaStatus         string
 	Services              []string
 	ConfigMaps            []string
 	Secrets               []string
 	EnvVariables          []string
+	ContainerCommand      string
 	Types                 []string // one or more of the above failure types
 	Message               string   // optional: short message we can print now; events on Day 4
 	Events                []string
@@ -162,6 +165,7 @@ func DetectFailures(pod corev1.Pod) []PodFailure {
 			lastExitCode := int32(0)
 			memoryLimit := ""
 			cpuRequest := ""
+			containerCommand := ""
 
 			if foundContainerSpec {
 				if q, ok := containerSpec.Resources.Limits[corev1.ResourceMemory]; ok {
@@ -169,6 +173,14 @@ func DetectFailures(pod corev1.Pod) []PodFailure {
 				}
 				if q, ok := containerSpec.Resources.Requests[corev1.ResourceCPU]; ok {
 					cpuRequest = q.String()
+				}
+				if len(containerSpec.Command) > 0 {
+					containerCommand = strings.Join(containerSpec.Command, " ")
+					if len(containerSpec.Args) > 0 {
+						containerCommand = containerCommand + " " + strings.Join(containerSpec.Args, " ")
+					}
+				} else if len(containerSpec.Args) > 0 {
+					containerCommand = strings.Join(containerSpec.Args, " ")
 				}
 			}
 
@@ -234,6 +246,7 @@ func DetectFailures(pod corev1.Pod) []PodFailure {
 					LastExitCode:          lastExitCode,
 					MemoryLimit:           memoryLimit,
 					CPURequest:            cpuRequest,
+					ContainerCommand:      containerCommand,
 					PodAgeSeconds:         podAgeSeconds,
 					RecentRollout:         recentRollout,
 				})
@@ -296,46 +309,48 @@ func enrichFailureWithWorkloadContext(ctx context.Context, cs *kubernetes.Client
 		return
 	}
 
-	failure.Deployment, failure.ReplicaStatus = resolveDeploymentStatus(ctx, cs, pod)
+	failure.Deployment, failure.DeploymentRevision, failure.ReplicaStatus = resolveDeploymentStatus(ctx, cs, pod)
 	failure.Services = listMatchingServices(ctx, cs, pod)
 	failure.ConfigMaps, failure.Secrets, failure.EnvVariables = collectPodConfigRefs(pod, failure.Container)
 }
 
-func resolveDeploymentStatus(ctx context.Context, cs *kubernetes.Clientset, pod corev1.Pod) (string, string) {
+func resolveDeploymentStatus(ctx context.Context, cs *kubernetes.Clientset, pod corev1.Pod) (string, string, string) {
 	for _, owner := range pod.OwnerReferences {
 		if owner.Kind == "Deployment" {
 			dep, err := cs.AppsV1().Deployments(pod.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
 			if err != nil {
-				return owner.Name, ""
+				return owner.Name, "", ""
 			}
 			desired := int32(1)
 			if dep.Spec.Replicas != nil {
 				desired = *dep.Spec.Replicas
 			}
-			return owner.Name, fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, desired)
+			revision := dep.Annotations["deployment.kubernetes.io/revision"]
+			return owner.Name, revision, fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, desired)
 		}
 		if owner.Kind == "ReplicaSet" {
 			rs, err := cs.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
 			if err != nil {
-				return "", ""
+				return "", "", ""
 			}
 			for _, rsOwner := range rs.OwnerReferences {
 				if rsOwner.Kind == "Deployment" {
 					dep, depErr := cs.AppsV1().Deployments(pod.Namespace).Get(ctx, rsOwner.Name, metav1.GetOptions{})
 					if depErr != nil {
-						return rsOwner.Name, ""
+						return rsOwner.Name, "", ""
 					}
 					desired := int32(1)
 					if dep.Spec.Replicas != nil {
 						desired = *dep.Spec.Replicas
 					}
-					return rsOwner.Name, fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, desired)
+					revision := dep.Annotations["deployment.kubernetes.io/revision"]
+					return rsOwner.Name, revision, fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, desired)
 				}
 			}
 		}
 	}
 
-	return "", ""
+	return "", "", ""
 }
 
 func listMatchingServices(ctx context.Context, cs *kubernetes.Clientset, pod corev1.Pod) []string {
@@ -480,6 +495,9 @@ func enrichFailureWithEventSignals(failure *PodFailure) {
 		}
 		if strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "connection timed out") || strings.Contains(lower, "context deadline exceeded") {
 			failure.Types = appendType(failure.Types, string(FailureNetworkTimeout))
+		}
+		if strings.Contains(lower, "progress deadline exceeded") || strings.Contains(lower, "timed out progressing") {
+			failure.Types = appendType(failure.Types, string(FailureRolloutFailed))
 		}
 	}
 

@@ -110,6 +110,12 @@ var v1Rules = []Rule{
 		SuggestedFix: "Check service endpoints, network policies, and destination availability",
 		Confidence:   "medium",
 	},
+	{
+		FailureType:  "DeploymentRolloutFailed",
+		LikelyCause:  "Deployment rollout did not make progress before the progress deadline",
+		SuggestedFix: "Inspect deployment rollout status, recent spec changes, and failing pod diagnostics",
+		Confidence:   "high",
+	},
 }
 
 func DiagnoseFailures(orgID, clusterID string, failures []k8s.PodFailure) []Diagnosis {
@@ -239,6 +245,11 @@ func enrichConfidence(base, failureType string, failure k8s.PodFailure, evidence
 				evidenceScore = maxInt(evidenceScore, 1)
 				reasons = append(reasons, "network timeout observed in events")
 			}
+		case "DeploymentRolloutFailed":
+			if strings.Contains(lowerEvent, "progress deadline exceeded") || strings.Contains(lowerEvent, "timed out progressing") {
+				evidenceScore = maxInt(evidenceScore, 1)
+				reasons = append(reasons, "deployment rollout timeout reported by controller")
+			}
 		}
 	}
 
@@ -295,6 +306,8 @@ func computeSeverity(confidence, failureType string, failure k8s.PodFailure) str
 		score += 1
 	case "DNSLookupFailed", "NetworkTimeout":
 		score += 1
+	case "DeploymentRolloutFailed":
+		score += 2
 	}
 	if failure.RestartCount >= 10 {
 		score += 2
@@ -377,6 +390,15 @@ func buildEvidence(failureType string, failure k8s.PodFailure) []string {
 	if failure.Message != "" {
 		evidence = append(evidence, "Kubernetes message: "+failure.Message)
 	}
+	if failure.Deployment != "" {
+		evidence = append(evidence, "Deployment: "+failure.Deployment)
+	}
+	if failure.DeploymentRevision != "" {
+		evidence = append(evidence, "Deployment revision: "+failure.DeploymentRevision)
+	}
+	if failure.ContainerCommand != "" {
+		evidence = append(evidence, "Container command: "+failure.ContainerCommand)
+	}
 
 	for _, event := range failure.Events {
 		lower := strings.ToLower(event)
@@ -426,6 +448,10 @@ func buildEvidence(failureType string, failure k8s.PodFailure) []string {
 			if strings.Contains(lower, "mountvolume") || strings.Contains(lower, "mount failed") {
 				evidence = append(evidence, "Volume mount failure: "+event)
 			}
+		case "DeploymentRolloutFailed":
+			if strings.Contains(lower, "progress deadline exceeded") || strings.Contains(lower, "timed out progressing") {
+				evidence = append(evidence, "Rollout timeout event: "+event)
+			}
 		}
 
 		if strings.Contains(lower, "lookup") && strings.Contains(lower, "no such host") {
@@ -474,6 +500,9 @@ func buildContextSignals(failure k8s.PodFailure) []string {
 	if failure.Deployment != "" {
 		context = append(context, "Deployment: "+failure.Deployment)
 	}
+	if failure.DeploymentRevision != "" {
+		context = append(context, "Deployment revision: "+failure.DeploymentRevision)
+	}
 	if failure.ReplicaStatus != "" {
 		context = append(context, "Replicas: "+failure.ReplicaStatus+" ready")
 	}
@@ -492,6 +521,9 @@ func buildContextSignals(failure k8s.PodFailure) []string {
 			maxEnv = 8
 		}
 		context = append(context, "Env vars: "+strings.Join(failure.EnvVariables[:maxEnv], ", "))
+	}
+	if failure.ContainerCommand != "" {
+		context = append(context, "Command: "+failure.ContainerCommand)
 	}
 	return context
 }
@@ -524,10 +556,31 @@ func deriveLikelyCause(defaultCause, failureType string, failure k8s.PodFailure,
 		if strings.Contains(combined, "i/o timeout") || strings.Contains(combined, "connection timed out") || strings.Contains(combined, "context deadline exceeded") {
 			return "Application cannot reach dependency due to network timeout"
 		}
+		if strings.Contains(combined, "permission denied") && failure.ContainerCommand != "" {
+			return "Container command failed with permission denied (check executable path/permissions): " + failure.ContainerCommand
+		}
 		if failure.ExitCode != 0 || failure.LastExitCode != 0 {
 			code := failure.ExitCode
 			if code == 0 {
 				code = failure.LastExitCode
+			}
+			if code == 137 {
+				if failure.MemoryLimit != "" {
+					return "Process terminated with exit code 137 (likely memory pressure near limit " + failure.MemoryLimit + ")"
+				}
+				return "Process terminated with exit code 137 (likely memory pressure or forced kill)"
+			}
+			if code == 127 {
+				return "Process exited with code 127 (startup command or binary not found)"
+			}
+			if code == 126 {
+				return "Process exited with code 126 (startup command found but not executable)"
+			}
+			if code == 1 && failure.RecentRollout {
+				if failure.DeploymentRevision != "" {
+					return "Application began crashing right after rollout revision " + failure.DeploymentRevision + " (exit code 1)"
+				}
+				return "Application began crashing immediately after a recent rollout (exit code 1)"
 			}
 			return "Application exited with non-zero code " + itoa32(code) + " — likely startup error or misconfiguration"
 		}
@@ -578,6 +631,14 @@ func deriveLikelyCause(defaultCause, failureType string, failure k8s.PodFailure,
 		return "Application failed DNS resolution for a service/dependency hostname"
 	case "NetworkTimeout":
 		return "Application timed out while connecting to a dependency endpoint"
+	case "DeploymentRolloutFailed":
+		if failure.Deployment != "" && failure.ReplicaStatus != "" {
+			return "Deployment " + failure.Deployment + " rollout stalled with only " + failure.ReplicaStatus + " replicas ready before progress deadline"
+		}
+		if failure.Deployment != "" {
+			return "Deployment " + failure.Deployment + " rollout stalled before progress deadline"
+		}
+		return "Deployment rollout failed to progress before progress deadline"
 	}
 
 	return defaultCause
@@ -639,6 +700,11 @@ func deriveSuggestedFix(defaultFix, failureType string, failure k8s.PodFailure, 
 		return "1. Verify the dependency hostname exists as a Kubernetes Service\n2. Check DNS suffix and namespace (svc.cluster.local)\n3. Validate CoreDNS health and pod DNS config"
 	case "NetworkTimeout":
 		return "1. Check endpoints for the target Service\n2. Validate NetworkPolicies allow traffic\n3. Ensure destination pods are healthy and listening"
+	case "DeploymentRolloutFailed":
+		if failure.Deployment != "" {
+			return "1. Check rollout status: kubectl -n " + ns + " rollout status deployment/" + failure.Deployment + "\n2. Inspect deployment events: kubectl -n " + ns + " describe deployment " + failure.Deployment + "\n3. Compare current revision to previous and inspect failing pod logs"
+		}
+		return "1. Inspect deployment events for progress deadline failures\n2. Compare recent image/config changes\n3. Check logs of new pods created during rollout"
 	}
 
 	return defaultFix
@@ -818,6 +884,28 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 				Command:     "kubectl -n " + ns + " get networkpolicy",
 			},
 		}
+	case "DeploymentRolloutFailed":
+		target := failure.Deployment
+		if strings.TrimSpace(target) == "" {
+			target = "<deployment-name>"
+		}
+		return []FixSuggestion{
+			{
+				Title:       "Inspect rollout status",
+				Explanation: "Confirm exactly which condition is blocking rollout progress.",
+				Command:     "kubectl -n " + ns + " rollout status deployment/" + target,
+			},
+			{
+				Title:       "Review deployment change",
+				Explanation: "Compare image, command, env, and config references introduced in the current revision.",
+				Command:     "kubectl -n " + ns + " describe deployment " + target,
+			},
+			{
+				Title:       "Rollback if customer impact is high",
+				Explanation: "If the new revision is unhealthy, rollback to the previous working revision to stop the incident.",
+				Command:     "kubectl -n " + ns + " rollout undo deployment/" + target,
+			},
+		}
 	}
 
 	return nil
@@ -844,6 +932,8 @@ func categorizeFailure(failureType string) string {
 		return "Resource constraint"
 	case "DNSLookupFailed", "NetworkTimeout":
 		return "Connectivity"
+	case "DeploymentRolloutFailed":
+		return "Rollout"
 	case "ReadinessProbeFailed", "LivenessProbeFailed":
 		return "Health check"
 	default:
@@ -898,6 +988,16 @@ func buildQuickCommands(failureType string, failure k8s.PodFailure, evidence []s
 		commands = append(commands,
 			"kubectl -n "+ns+" get endpoints",
 			"kubectl -n "+ns+" get networkpolicy",
+		)
+	case "DeploymentRolloutFailed":
+		target := failure.Deployment
+		if strings.TrimSpace(target) == "" {
+			target = "<deployment-name>"
+		}
+		commands = append(commands,
+			"kubectl -n "+ns+" rollout status deployment/"+target,
+			"kubectl -n "+ns+" describe deployment "+target,
+			"kubectl -n "+ns+" rollout history deployment/"+target,
 		)
 	case "ConfigMapMissing":
 		for _, e := range evidence {
