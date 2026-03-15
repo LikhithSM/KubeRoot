@@ -17,8 +17,8 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, onClose }
   const contextSignals = diagnosis.context || [];
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-96 overflow-y-auto border border-gray-200">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 md:p-5 z-50">
+      <div className="bg-white rounded-2xl shadow-xl w-[96vw] md:w-[92vw] max-w-5xl max-h-[90vh] overflow-y-auto border border-gray-200">
         <div className="sticky top-0 bg-gradient-to-r from-kuberoot-700 to-kuberoot-500 text-white px-6 py-4 flex justify-between items-center">
           <h2 className="text-xl font-bold font-display">{diagnosis.podName}</h2>
           <button
