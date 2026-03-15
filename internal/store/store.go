@@ -18,6 +18,7 @@ type DiagnosisHistoryFilter struct {
 type CurrentFailure struct {
 	IssueKey        string             `json:"issueKey"`
 	Diagnosis       analyzer.Diagnosis `json:"diagnosis"`
+	Severity        string             `json:"severity"` // critical | high | medium | low
 	FirstSeen       time.Time          `json:"firstSeen"`
 	LastSeen        time.Time          `json:"lastSeen"`
 	DurationSeconds int64              `json:"durationSeconds"`

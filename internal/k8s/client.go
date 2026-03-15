@@ -37,6 +37,9 @@ const (
 	FailureFailedScheduling FailureType = "FailedScheduling"
 	FailureReadinessProbe   FailureType = "ReadinessProbeFailed"
 	FailureLivenessProbe    FailureType = "LivenessProbeFailed"
+	FailureConfigMapMissing FailureType = "ConfigMapMissing"
+	FailureSecretMissing    FailureType = "SecretMissing"
+	FailurePodPending       FailureType = "PodPending"
 )
 
 type PodFailure struct {
@@ -173,6 +176,12 @@ func DetectFailures(pod corev1.Pod) []PodFailure {
 				case "ImagePullBackOff", "ErrImagePull":
 					types = appendType(types, string(FailureImagePullBackOff))
 					msg = cs.State.Waiting.Message
+				case "ContainerCreating":
+					// Only flag pods stuck in ContainerCreating — likely a missing ConfigMap/Secret
+					if podAgeSeconds > 30 {
+						types = appendType(types, string(FailurePodPending))
+						msg = cs.State.Waiting.Message
+					}
 				}
 			}
 
@@ -292,15 +301,48 @@ func findContainerSpec(containers []corev1.Container, name string) (corev1.Conta
 }
 
 func enrichFailureWithEventSignals(failure *PodFailure) {
+	configMapHit := false
+	secretHit := false
+
 	for _, event := range failure.Events {
 		lower := strings.ToLower(event)
+
 		if strings.Contains(lower, "readiness probe failed") {
 			failure.Types = appendType(failure.Types, string(FailureReadinessProbe))
 		}
 		if strings.Contains(lower, "liveness probe failed") {
 			failure.Types = appendType(failure.Types, string(FailureLivenessProbe))
 		}
+
+		// ConfigMap mount failure: "MountVolume.SetUp failed ... configmap "name" not found"
+		isMountFail := strings.Contains(lower, "mountvolume") || strings.Contains(lower, "mount failed")
+		if isMountFail && strings.Contains(lower, "configmap") && (strings.Contains(lower, "not found") || strings.Contains(lower, "failed")) {
+			configMapHit = true
+		}
+		// Secret mount failure
+		if isMountFail && strings.Contains(lower, "secret") && (strings.Contains(lower, "not found") || strings.Contains(lower, "failed")) {
+			secretHit = true
+		}
 	}
+
+	if configMapHit {
+		failure.Types = removeType(failure.Types, string(FailurePodPending))
+		failure.Types = appendType(failure.Types, string(FailureConfigMapMissing))
+	}
+	if secretHit {
+		failure.Types = removeType(failure.Types, string(FailurePodPending))
+		failure.Types = appendType(failure.Types, string(FailureSecretMissing))
+	}
+}
+
+func removeType(types []string, t string) []string {
+	out := make([]string, 0, len(types))
+	for _, existing := range types {
+		if existing != t {
+			out = append(out, existing)
+		}
+	}
+	return out
 }
 
 func getRecentPodEvents(ctx context.Context, cs *kubernetes.Clientset, namespace, podName string, limit int) ([]string, error) {

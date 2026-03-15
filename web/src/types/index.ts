@@ -16,6 +16,7 @@ export interface Diagnosis {
   image?: string;
   restartCount?: number;
   failureType: string;
+  severity?: "critical" | "high" | "medium" | "low";
   likelyCause: string;
   suggestedFix: string;
   confidence: "low" | "medium" | "high";
@@ -30,6 +31,7 @@ export interface Diagnosis {
 export interface CurrentFailure {
   issueKey: string;
   diagnosis: Diagnosis;
+  severity: "critical" | "high" | "medium" | "low";
   firstSeen: string;
   lastSeen: string;
   durationSeconds: number;

@@ -514,6 +514,7 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 			failure.PreviousImage = previousImage.String
 		}
 		failure.Timeline = buildFailureTimeline(failure)
+		failure.Severity = computeCurrentFailureSeverity(failure)
 
 		out = append(out, failure)
 	}
@@ -542,6 +543,74 @@ func buildFailureTimeline(f CurrentFailure) []string {
 	}
 
 	return lines
+}
+
+// computeCurrentFailureSeverity escalates severity using aggregate signals
+// (restartSpike, duration, imageChanged) on top of the base diagnosis severity.
+func computeCurrentFailureSeverity(f CurrentFailure) string {
+	base := computeDiagnosisSeverity(f.Diagnosis.Confidence, f.Diagnosis.FailureType, f.Diagnosis.RestartCount)
+	score := 0
+	switch base {
+	case "critical":
+		score = 4
+	case "high":
+		score = 3
+	case "medium":
+		score = 2
+	default:
+		score = 1
+	}
+	if f.RestartSpike {
+		score += 2
+	}
+	if f.DurationSeconds > 30*60 { // > 30 min running
+		score++
+	}
+	if f.ImageChanged {
+		score++
+	}
+	switch {
+	case score >= 6:
+		return "critical"
+	case score >= 4:
+		return "high"
+	case score >= 3:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+// computeDiagnosisSeverity derives a base severity from confidence + failure type + restart count.
+func computeDiagnosisSeverity(confidence, failureType string, restartCount int32) string {
+	score := 0
+	switch confidence {
+	case "high":
+		score += 3
+	case "medium":
+		score += 2
+	default:
+		score += 1
+	}
+	switch failureType {
+	case "OOMKilled", "CrashLoopBackOff", "ConfigMapMissing", "SecretMissing":
+		score++
+	}
+	if restartCount >= 10 {
+		score += 2
+	} else if restartCount >= 3 {
+		score++
+	}
+	switch {
+	case score >= 6:
+		return "critical"
+	case score >= 4:
+		return "high"
+	case score >= 3:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func (s *PostgresStore) SaveDiagnoses(ctx context.Context, organizationID, clusterID string, diagnoses []analyzer.Diagnosis) error {

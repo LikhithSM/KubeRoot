@@ -114,20 +114,84 @@ func notifySlack(webhookURL, clusterID string, diagnoses []analyzer.Diagnosis) e
 		maxItems = len(diagnoses)
 	}
 
-	lines := make([]string, 0, maxItems+2)
-	lines = append(lines, "Kuberoot detected new active failures")
-	lines = append(lines, "Cluster: "+clusterID)
-	for i := 0; i < maxItems; i++ {
-		d := diagnoses[i]
-		lines = append(lines, "- "+d.Namespace+"/"+d.PodName+" | "+d.FailureType+" | "+strings.ToUpper(d.Confidence))
-	}
-	if len(diagnoses) > maxItems {
-		lines = append(lines, "...and "+itoa(len(diagnoses)-maxItems)+" more")
+	// Build Slack Block Kit payload for rich formatting
+	blocks := make([]map[string]any, 0, maxItems*2+3)
+
+	// Header block
+	header := fmt.Sprintf(":rotating_light: *%d new Kubernetes issue(s) detected*", len(diagnoses))
+	blocks = append(blocks, map[string]any{
+		"type": "header",
+		"text": map[string]any{"type": "plain_text", "text": fmt.Sprintf("%d new Kubernetes issue(s)", len(diagnoses))},
+	})
+	blocks = append(blocks, map[string]any{
+		"type": "section",
+		"text": map[string]any{"type": "mrkdwn", "text": header + "\n*Cluster:* `" + clusterID + "`"},
+	})
+	blocks = append(blocks, map[string]any{"type": "divider"})
+
+	severityEmoji := map[string]string{
+		"critical": ":red_circle:",
+		"high":     ":large_orange_circle:",
+		"medium":   ":large_yellow_circle:",
+		"low":      ":white_circle:",
 	}
 
-	body, err := json.Marshal(map[string]string{
-		"text": strings.Join(lines, "\n"),
+	for i := 0; i < maxItems; i++ {
+		d := diagnoses[i]
+		emoji := severityEmoji[strings.ToLower(d.Severity)]
+		if emoji == "" {
+			emoji = ":large_yellow_circle:"
+		}
+		sevLabel := strings.ToUpper(d.Severity)
+		if sevLabel == "" {
+			sevLabel = strings.ToUpper(d.Confidence)
+		}
+
+		text := fmt.Sprintf("%s *%s/%s*\n*Failure:* `%s`  |  *Severity:* %s\n*Cause:* %s",
+			emoji, d.Namespace, d.PodName, d.FailureType, sevLabel, d.LikelyCause)
+
+		if len(d.QuickCommands) > 0 {
+			text += "\n```" + d.QuickCommands[0] + "```"
+		}
+
+		blocks = append(blocks, map[string]any{
+			"type": "section",
+			"text": map[string]any{"type": "mrkdwn", "text": text},
+		})
+
+		if i < maxItems-1 {
+			blocks = append(blocks, map[string]any{"type": "divider"})
+		}
+	}
+
+	if len(diagnoses) > maxItems {
+		blocks = append(blocks, map[string]any{
+			"type": "context",
+			"elements": []map[string]any{
+				{"type": "mrkdwn", "text": fmt.Sprintf("_...and %d more issue(s) — view in Kuberoot_", len(diagnoses)-maxItems)},
+			},
+		})
+	}
+
+	// Footer with dashboard link
+	dashURL := os.Getenv("VITE_API_URL")
+	if dashURL == "" {
+		dashURL = "https://kube-root.vercel.app"
+	}
+	blocks = append(blocks, map[string]any{
+		"type": "actions",
+		"elements": []map[string]any{
+			{
+				"type":  "button",
+				"text":  map[string]any{"type": "plain_text", "text": "Open Kuberoot Dashboard"},
+				"url":   dashURL,
+				"style": "primary",
+			},
+		},
 	})
+
+	payload := map[string]any{"blocks": blocks}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
