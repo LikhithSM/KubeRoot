@@ -29,7 +29,7 @@ services:
         condition: service_healthy
     environment:
       KUBEROOT_CLUSTER_ID: "docker-local"
-      DATABASE_URL: "postgresql://kuberoot:kuberoot_local@postgres:5432/kuberoot"
+      DATABASE_URL: "postgresql://kuberoot:kuberoot_local@postgres:5432/kuberoot?sslmode=disable"
       INTERNAL_API_TOKEN: "4a4b37ac1985f77f39761f1f49b3585b97d9436865a025ab8a4d5d692472d051"
     ports:
       - "8080:8080"

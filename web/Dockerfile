@@ -2,10 +2,10 @@ FROM node:25 AS builder
 
 WORKDIR /build
 
-COPY web/package*.json ./
+COPY package*.json ./
 RUN npm ci
 
-COPY web .
+COPY . .
 RUN npm run build
 
 FROM node:25-alpine
