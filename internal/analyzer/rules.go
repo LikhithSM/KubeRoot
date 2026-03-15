@@ -158,9 +158,38 @@ func HydrateDiagnosis(d *Diagnosis) {
 	if len(d.FixSuggestions) == 0 {
 		d.FixSuggestions = buildFixSuggestions(d.FailureType, failure, d.Evidence)
 	}
+	d.FixSuggestions = sanitizeFixSuggestions(d.FixSuggestions)
 	if strings.TrimSpace(d.SuggestedFix) == "" || strings.Contains(d.SuggestedFix, "Inspect") || strings.Contains(d.SuggestedFix, "Verify") || strings.Contains(d.SuggestedFix, "Check") {
 		d.SuggestedFix = deriveSuggestedFix(d.SuggestedFix, d.FailureType, failure, d.Evidence, d.FixSuggestions)
 	}
+}
+
+func sanitizeFixSuggestions(fixes []FixSuggestion) []FixSuggestion {
+	if len(fixes) == 0 {
+		return nil
+	}
+
+	clean := make([]FixSuggestion, 0, len(fixes))
+	for _, fix := range fixes {
+		cmd := strings.TrimSpace(fix.Command)
+		title := strings.TrimSpace(fix.Title)
+		explanation := strings.TrimSpace(fix.Explanation)
+
+		if cmd == "" && title == "" && explanation == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(cmd), "common causes:") {
+			continue
+		}
+
+		clean = append(clean, FixSuggestion{
+			Title:       title,
+			Explanation: explanation,
+			Command:     cmd,
+		})
+	}
+
+	return clean
 }
 
 func enrichConfidence(base, failureType string, failure k8s.PodFailure, evidence []string) (string, string) {
@@ -761,6 +790,10 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 		if failure.Container != "" {
 			logsCmd = "kubectl -n " + ns + " logs " + pod + " -c " + failure.Container + " --previous"
 		}
+		describeCmd := "kubectl -n " + ns + " describe pod " + pod
+		if failure.Container != "" {
+			describeCmd = "kubectl -n " + ns + " get pod " + pod + " -o jsonpath='{.spec.containers[?(@.name==\"" + failure.Container + "\")].command}'"
+		}
 		return []FixSuggestion{
 			{
 				Title:       "Inspect previous logs",
@@ -768,9 +801,9 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 				Command:     logsCmd,
 			},
 			{
-				Title:       "Check common startup causes",
-				Explanation: "Review the three most common CrashLoop causes in Deployment config and app startup.",
-				Command:     "Common causes:\n- Missing environment variables\n- Failed DB connection\n- Wrong startup command",
+				Title:       "Check effective startup command",
+				Explanation: "Verify the container command/args running in the pod are what your app expects.",
+				Command:     describeCmd,
 			},
 		}
 	case "OOMKilled":

@@ -1,36 +1,74 @@
 package analyzer
 
-type staticFailureRule struct {
-	name       string
-	priority   int
-	failureType string
+type runtimeRuleFunc struct {
+	evaluate func(signal PodSignal, ctx WorkloadContext) *DiagnosisDecision
 }
 
-func (r staticFailureRule) Name() string { return r.name }
-
-func (r staticFailureRule) Priority() int { return r.priority }
-
-func (r staticFailureRule) Evaluate(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
-	if signal.FailureType != r.failureType {
+func (r runtimeRuleFunc) Evaluate(signal PodSignal, ctx WorkloadContext) *DiagnosisDecision {
+	if r.evaluate == nil {
 		return nil
 	}
-	return &DiagnosisDecision{FailureType: r.failureType}
+	return r.evaluate(signal, ctx)
+}
+
+func detectCrashLoop(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
+	if signal.FailureType != "CrashLoopBackOff" {
+		return nil
+	}
+	return &DiagnosisDecision{FailureType: "CrashLoopBackOff"}
+}
+
+func detectImagePull(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
+	if signal.FailureType != "ImagePullBackOff" {
+		return nil
+	}
+	return &DiagnosisDecision{FailureType: "ImagePullBackOff"}
+}
+
+func detectOOM(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
+	if signal.FailureType != "OOMKilled" {
+		return nil
+	}
+	return &DiagnosisDecision{FailureType: "OOMKilled"}
+}
+
+func detectProbeFailure(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
+	if signal.FailureType == "ReadinessProbeFailed" || signal.FailureType == "LivenessProbeFailed" {
+		return &DiagnosisDecision{FailureType: signal.FailureType}
+	}
+	return nil
+}
+
+func detectScheduling(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
+	if signal.FailureType == "FailedScheduling" {
+		return &DiagnosisDecision{FailureType: "FailedScheduling"}
+	}
+	return nil
+}
+
+func detectPending(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
+	if signal.FailureType == "PodPending" {
+		return &DiagnosisDecision{FailureType: "PodPending"}
+	}
+	return nil
+}
+
+func detectRollout(signal PodSignal, _ WorkloadContext) *DiagnosisDecision {
+	if signal.FailureType == "DeploymentRolloutFailed" {
+		return &DiagnosisDecision{FailureType: "DeploymentRolloutFailed"}
+	}
+	return nil
 }
 
 func defaultRuntimeRules() []RuntimeRule {
-	// Priority order: infrastructure -> configuration -> dependency -> runtime/application.
+	// Ordered with lightweight infrastructure/runtime checks first.
 	return []RuntimeRule{
-		staticFailureRule{name: "imagepull", priority: 10, failureType: "ImagePullBackOff"},
-		staticFailureRule{name: "failed-scheduling", priority: 11, failureType: "FailedScheduling"},
-		staticFailureRule{name: "configmap-missing", priority: 20, failureType: "ConfigMapMissing"},
-		staticFailureRule{name: "secret-missing", priority: 21, failureType: "SecretMissing"},
-		staticFailureRule{name: "dns-failure", priority: 30, failureType: "DNSLookupFailed"},
-		staticFailureRule{name: "network-timeout", priority: 31, failureType: "NetworkTimeout"},
-		staticFailureRule{name: "rollout-failed", priority: 35, failureType: "DeploymentRolloutFailed"},
-		staticFailureRule{name: "oom-killed", priority: 40, failureType: "OOMKilled"},
-		staticFailureRule{name: "readiness-failed", priority: 41, failureType: "ReadinessProbeFailed"},
-		staticFailureRule{name: "liveness-failed", priority: 42, failureType: "LivenessProbeFailed"},
-		staticFailureRule{name: "crashloop", priority: 50, failureType: "CrashLoopBackOff"},
-		staticFailureRule{name: "pod-pending", priority: 60, failureType: "PodPending"},
+		runtimeRuleFunc{evaluate: detectImagePull},
+		runtimeRuleFunc{evaluate: detectScheduling},
+		runtimeRuleFunc{evaluate: detectRollout},
+		runtimeRuleFunc{evaluate: detectOOM},
+		runtimeRuleFunc{evaluate: detectProbeFailure},
+		runtimeRuleFunc{evaluate: detectCrashLoop},
+		runtimeRuleFunc{evaluate: detectPending},
 	}
 }

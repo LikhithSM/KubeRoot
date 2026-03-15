@@ -15,13 +15,31 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, occurrenc
   if (!diagnosis) return null;
 
   const evidence = diagnosis.evidence || [];
-  const fixSuggestions = diagnosis.fixSuggestions || [];
+  const fixSuggestions = (diagnosis.fixSuggestions || []).filter((fix) => {
+    const cmd = (fix.command || '').trim();
+    return !cmd.startsWith('Common causes:');
+  });
   const quickCommands = diagnosis.quickCommands || [];
   const contextSignals = diagnosis.context || [];
   const replicasLine = contextSignals.find((c) => c.startsWith('Replicas: '));
+
+  const isPatchSnippet = (cmd: string): boolean => {
+    const value = cmd.trim();
+    if (!value || value.startsWith('kubectl ') || value.startsWith('docker ') || value.startsWith('DATABASE_HOST=')) {
+      return false;
+    }
+    return (
+      value.startsWith('spec:') ||
+      value.startsWith('resources:') ||
+      value.startsWith('readinessProbe:') ||
+      value.startsWith('livenessProbe:') ||
+      value.startsWith('image:')
+    );
+  };
+
   const suggestedPatch = fixSuggestions
     .map((f) => f.command?.trim() || '')
-    .find((cmd) => cmd.includes(':') && !cmd.startsWith('kubectl ') && !cmd.startsWith('docker '));
+    .find((cmd) => isPatchSnippet(cmd));
 
   const impactSummary = (() => {
     const lines: string[] = [];

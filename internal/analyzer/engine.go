@@ -6,18 +6,7 @@ import (
 	"kuberoot/internal/k8s"
 )
 
-// DiagnosisDecision is an optional override produced by validators/rules.
-type DiagnosisDecision struct {
-	FailureType    string
-	LikelyCause    string
-	SuggestedFix   string
-	Confidence     string
-	ConfidenceNote string
-}
-
 type RuntimeRule interface {
-	Name() string
-	Priority() int
 	Evaluate(signal PodSignal, ctx WorkloadContext) *DiagnosisDecision
 }
 
@@ -79,6 +68,7 @@ func (e *DiagnosisEngine) composeDiagnosis(orgID, clusterID string, failure k8s.
 	ctx = append(ctx, buildDependencyGraph(buildWorkloadContext(failure))...)
 	likelyCause := deriveLikelyCause(rule.LikelyCause, effectiveType, failure, evidence)
 	fixSuggestions := buildFixSuggestions(effectiveType, failure, evidence)
+	fixSuggestions = sanitizeFixSuggestions(fixSuggestions)
 	suggestedFix := deriveSuggestedFix(rule.SuggestedFix, effectiveType, failure, evidence, fixSuggestions)
 	quickCommands := buildQuickCommands(effectiveType, failure, evidence)
 	confidence, confidenceNote := enrichConfidence(rule.Confidence, effectiveType, failure, evidence)
