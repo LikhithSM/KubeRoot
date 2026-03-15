@@ -44,8 +44,9 @@ export async function fetchCurrentFailures(params?: {
   since?: string;
   until?: string;
 }): Promise<CurrentFailure[]> {
+  const cluster = params?.cluster || CLUSTER_ID;
   const queryParams = new URLSearchParams();
-  if (params?.cluster) queryParams.append('cluster', params.cluster);
+  if (cluster) queryParams.append('cluster', cluster);
   if (params?.limit) queryParams.append('limit', String(params.limit));
   if (params?.failureType) queryParams.append('failureType', params.failureType);
   if (params?.namespace) queryParams.append('namespace', params.namespace);
@@ -64,7 +65,10 @@ export async function fetchCurrentFailures(params?: {
     headers['X-API-Key'] = API_KEY;
   }
 
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, {
+    headers,
+    cache: 'no-store',
+  });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
@@ -101,7 +105,10 @@ export async function fetchDiagnosesHistory(params?: {
     headers['X-API-Key'] = API_KEY;
   }
 
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, {
+    headers,
+    cache: 'no-store',
+  });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }

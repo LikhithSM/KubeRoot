@@ -1,5 +1,6 @@
 export default async function handler(req, res) {
   try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     const query = req.url.replace(/^\/api\/history/, '') || '';
     const target = `${process.env.VITE_API_URL}/diagnose/history${query}`;
 
@@ -16,7 +17,10 @@ export default async function handler(req, res) {
       headers['X-API-Key'] = req.headers['x-api-key'];
     }
 
-    const response = await fetch(target, { headers });
+    const response = await fetch(target, {
+      headers,
+      cache: 'no-store',
+    });
 
     // copy status and headers
     res.status(response.status);
