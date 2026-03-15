@@ -173,7 +173,7 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, occurrenc
           {suggestedPatch && (
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                Suggested Patch
+                Exact Fix (Patch Snippet)
               </label>
               <div className="bg-slate-950 text-slate-100 rounded-lg p-4 text-sm font-mono overflow-x-auto whitespace-pre-wrap border border-slate-700">
                 {suggestedPatch}
@@ -184,7 +184,7 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, occurrenc
           {fixSuggestions.length > 0 && (
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                Fix Suggestions
+                Exact Fix Commands
               </label>
               <div className="space-y-3">
                 {fixSuggestions.map((fix, idx) => (

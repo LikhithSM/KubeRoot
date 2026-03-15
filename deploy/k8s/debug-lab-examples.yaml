@@ -1,0 +1,306 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: debug-lab
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: good-pod
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: good-pod
+  template:
+    metadata:
+      labels:
+        app: good-pod
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop-demo
+  template:
+    metadata:
+      labels:
+        app: crashloop-demo
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command: ["sh", "-c", "echo crash && exit 1"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: imagepull-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: imagepull-demo
+  template:
+    metadata:
+      labels:
+        app: imagepull-demo
+    spec:
+      containers:
+        - name: app
+          image: this.registry.example.invalid/does-not-exist:v1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oom-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oom-demo
+  template:
+    metadata:
+      labels:
+        app: oom-demo
+    spec:
+      containers:
+        - name: memhog
+          image: python:3.11-alpine
+          command:
+            - python
+            - -c
+            - |
+              a=[]
+              while True:
+                  a.append('x'*1024*1024)
+          resources:
+            limits:
+              memory: 32Mi
+            requests:
+              memory: 16Mi
+              cpu: 50m
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: failedschedule-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: failedschedule-demo
+  template:
+    metadata:
+      labels:
+        app: failedschedule-demo
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests:
+              cpu: "100"
+              memory: 500Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: readiness-fail-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: readiness-fail-demo
+  template:
+    metadata:
+      labels:
+        app: readiness-fail-demo
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /definitely-not-ready
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 4
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liveness-fail-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liveness-fail-demo
+  template:
+    metadata:
+      labels:
+        app: liveness-fail-demo
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep 3600"]
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "exit 1"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: configmap-missing-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: configmap-missing-demo
+  template:
+    metadata:
+      labels:
+        app: configmap-missing-demo
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27-alpine
+          volumeMounts:
+            - name: cfg
+              mountPath: /etc/demo
+      volumes:
+        - name: cfg
+          configMap:
+            name: missing-configmap-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secret-missing-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: secret-missing-demo
+  template:
+    metadata:
+      labels:
+        app: secret-missing-demo
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27-alpine
+          volumeMounts:
+            - name: sec
+              mountPath: /etc/secret-demo
+      volumes:
+        - name: sec
+          secret:
+            secretName: missing-secret-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dnslookup-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dnslookup-demo
+  template:
+    metadata:
+      labels:
+        app: dnslookup-demo
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              host: no-such-service.debug-lab.svc.cluster.local
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-timeout-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: network-timeout-demo
+  template:
+    metadata:
+      labels:
+        app: network-timeout-demo
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              host: 10.255.255.1
+              path: /
+              port: 81
+            initialDelaySeconds: 3
+            timeoutSeconds: 1
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rollout-timeout-demo
+  namespace: debug-lab
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 30
+  selector:
+    matchLabels:
+      app: rollout-timeout-demo
+  template:
+    metadata:
+      labels:
+        app: rollout-timeout-demo
+    spec:
+      containers:
+        - name: app
+          image: this.registry.example.invalid/rollout-timeout:v1
