@@ -19,6 +19,9 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, occurrenc
   const quickCommands = diagnosis.quickCommands || [];
   const contextSignals = diagnosis.context || [];
   const replicasLine = contextSignals.find((c) => c.startsWith('Replicas: '));
+  const suggestedPatch = fixSuggestions
+    .map((f) => f.command?.trim() || '')
+    .find((cmd) => cmd.includes(':') && !cmd.startsWith('kubectl ') && !cmd.startsWith('docker '));
 
   const impactSummary = (() => {
     const lines: string[] = [];
@@ -166,6 +169,17 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, occurrenc
               <p className="text-gray-800 leading-relaxed whitespace-pre-line">{diagnosis.suggestedFix}</p>
             </div>
           </div>
+
+          {suggestedPatch && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Suggested Patch
+              </label>
+              <div className="bg-slate-950 text-slate-100 rounded-lg p-4 text-sm font-mono overflow-x-auto whitespace-pre-wrap border border-slate-700">
+                {suggestedPatch}
+              </div>
+            </div>
+          )}
 
           {fixSuggestions.length > 0 && (
             <div>

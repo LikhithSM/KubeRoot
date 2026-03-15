@@ -147,11 +147,23 @@ func notifySlack(webhookURL, clusterID string, diagnoses []analyzer.Diagnosis) e
 			sevLabel = strings.ToUpper(d.Confidence)
 		}
 
-		text := fmt.Sprintf("%s *%s/%s*\n*Failure:* `%s`  |  *Severity:* %s\n*Cause:* %s",
+		text := fmt.Sprintf("%s *%s/%s*\n*Failure:* `%s`  |  *Severity:* %s\n*Root Cause:* %s",
 			emoji, d.Namespace, d.PodName, d.FailureType, sevLabel, d.LikelyCause)
 
-		if len(d.QuickCommands) > 0 {
-			text += "\n```" + d.QuickCommands[0] + "```"
+		impactLine := slackImpactLine(d.Context)
+		if impactLine != "" {
+			text += "\n*Impact:* " + impactLine
+		}
+
+		fixCmd := ""
+		if len(d.FixSuggestions) > 0 {
+			fixCmd = strings.TrimSpace(d.FixSuggestions[0].Command)
+		}
+		if fixCmd == "" && len(d.QuickCommands) > 0 {
+			fixCmd = strings.TrimSpace(d.QuickCommands[0])
+		}
+		if fixCmd != "" {
+			text += "\n*Fix:*\n```" + firstLine(fixCmd) + "```"
 		}
 
 		blocks = append(blocks, map[string]any{
@@ -214,6 +226,33 @@ func notifySlack(webhookURL, clusterID string, diagnoses []analyzer.Diagnosis) e
 	}
 
 	return nil
+}
+
+func slackImpactLine(ctx []string) string {
+	for _, line := range ctx {
+		if strings.HasPrefix(line, "Replicas: ") {
+			m := strings.TrimPrefix(line, "Replicas: ")
+			parts := strings.SplitN(m, "/", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			ready := strings.TrimSpace(parts[0])
+			desired := strings.TrimSpace(strings.TrimSuffix(parts[1], " ready"))
+			if ready == desired {
+				return "no deployment degradation detected"
+			}
+			return fmt.Sprintf("deployment degraded (%s/%s ready)", ready, desired)
+		}
+	}
+	return "single pod issue"
+}
+
+func firstLine(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if idx := strings.Index(trimmed, "\n"); idx >= 0 {
+		return strings.TrimSpace(trimmed[:idx])
+	}
+	return trimmed
 }
 
 func itoa(v int) string {

@@ -38,6 +38,59 @@ export function Dashboard() {
     });
   }, [currentFailures, filters]);
 
+  const deploymentImpacts = useMemo(() => {
+    type Agg = {
+      deployment: string;
+      namespace: string;
+      ready: number;
+      desired: number;
+      pods: Set<string>;
+    };
+
+    const map = new Map<string, Agg>();
+    for (const issue of filteredCurrentFailures) {
+      const ctx = issue.diagnosis.context || [];
+      const depLine = ctx.find((c) => c.startsWith('Deployment: '));
+      if (!depLine) continue;
+
+      const deployment = depLine.replace('Deployment: ', '').trim();
+      if (!deployment) continue;
+
+      const key = `${issue.diagnosis.namespace}/${deployment}`;
+      const current = map.get(key) || {
+        deployment,
+        namespace: issue.diagnosis.namespace,
+        ready: 0,
+        desired: 0,
+        pods: new Set<string>(),
+      };
+
+      current.pods.add(issue.diagnosis.podName);
+
+      const replicasLine = ctx.find((c) => c.startsWith('Replicas: '));
+      if (replicasLine) {
+        const m = replicasLine.match(/Replicas:\s*(\d+)\/(\d+)/);
+        if (m) {
+          const ready = Number(m[1]);
+          const desired = Number(m[2]);
+          if (!Number.isNaN(ready) && !Number.isNaN(desired)) {
+            current.ready = ready;
+            current.desired = desired;
+          }
+        }
+      }
+
+      map.set(key, current);
+    }
+
+    return Array.from(map.values())
+      .map((a) => ({
+        ...a,
+        impacted: a.pods.size,
+      }))
+      .sort((a, b) => b.impacted - a.impacted);
+  }, [filteredCurrentFailures]);
+
   const uniqueNamespaces = useMemo(() => {
     const source = activeTab === 'active' ? currentDiagnoses : activeDiagnoses;
     const ns = new Set(source.map((d) => d.namespace));
@@ -134,6 +187,22 @@ export function Dashboard() {
           {/* Main Content */}
           {!loading || diagnoses.length > 0 ? (
             <>
+              {activeTab === 'active' && deploymentImpacts.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">Deployment Impact</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {deploymentImpacts.map((impact) => (
+                      <div key={`${impact.namespace}/${impact.deployment}`} className="surface-card rounded-xl p-4 border border-rose-200 bg-rose-50/60">
+                        <p className="text-xs uppercase tracking-wider text-rose-700">{impact.namespace}</p>
+                        <p className="text-base font-semibold text-rose-950 mt-1">{impact.deployment}</p>
+                        <p className="text-sm text-rose-900 mt-2">Impacted: {impact.impacted}/{impact.desired || impact.impacted} pods</p>
+                        <p className="text-xs text-rose-800 mt-1">Ready: {impact.ready}/{impact.desired || impact.ready}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Filters */}
               <FilterPanel
                 namespaces={uniqueNamespaces}

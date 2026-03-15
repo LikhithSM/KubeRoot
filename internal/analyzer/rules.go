@@ -98,6 +98,18 @@ var v1Rules = []Rule{
 		SuggestedFix: "Check pod events for mount failures or scheduling issues",
 		Confidence:   "low",
 	},
+	{
+		FailureType:  "DNSLookupFailed",
+		LikelyCause:  "Application failed to resolve a dependency hostname",
+		SuggestedFix: "Validate DNS name and service existence",
+		Confidence:   "high",
+	},
+	{
+		FailureType:  "NetworkTimeout",
+		LikelyCause:  "Application timed out reaching a dependency",
+		SuggestedFix: "Check service endpoints, network policies, and destination availability",
+		Confidence:   "medium",
+	},
 }
 
 func DiagnoseFailures(orgID, clusterID string, failures []k8s.PodFailure) []Diagnosis {
@@ -217,6 +229,16 @@ func enrichConfidence(base, failureType string, failure k8s.PodFailure, evidence
 				evidenceScore = maxInt(evidenceScore, 1)
 				reasons = append(reasons, "mount failure event names missing resource")
 			}
+		case "DNSLookupFailed":
+			if strings.Contains(lowerEvent, "lookup") && strings.Contains(lowerEvent, "no such host") {
+				evidenceScore = maxInt(evidenceScore, 1)
+				reasons = append(reasons, "dns lookup failure observed in events")
+			}
+		case "NetworkTimeout":
+			if strings.Contains(lowerEvent, "i/o timeout") || strings.Contains(lowerEvent, "connection timed out") || strings.Contains(lowerEvent, "context deadline exceeded") {
+				evidenceScore = maxInt(evidenceScore, 1)
+				reasons = append(reasons, "network timeout observed in events")
+			}
 		}
 	}
 
@@ -270,6 +292,8 @@ func computeSeverity(confidence, failureType string, failure k8s.PodFailure) str
 	case "OOMKilled", "CrashLoopBackOff":
 		score += 1
 	case "ConfigMapMissing", "SecretMissing":
+		score += 1
+	case "DNSLookupFailed", "NetworkTimeout":
 		score += 1
 	}
 	if failure.RestartCount >= 10 {
@@ -550,6 +574,10 @@ func deriveLikelyCause(defaultCause, failureType string, failure k8s.PodFailure,
 		return "Deployment references a Secret that does not exist in namespace " + failure.Namespace
 	case "PodPending":
 		return "Pod is stuck in pending state — waiting for volume mounts, scheduling, or resource availability"
+	case "DNSLookupFailed":
+		return "Application failed DNS resolution for a service/dependency hostname"
+	case "NetworkTimeout":
+		return "Application timed out while connecting to a dependency endpoint"
 	}
 
 	return defaultCause
@@ -607,6 +635,10 @@ func deriveSuggestedFix(defaultFix, failureType string, failure k8s.PodFailure, 
 		return "Create the missing Secret referenced in the Deployment volumes or envFrom section."
 	case "PodPending":
 		return "Run: kubectl -n " + ns + " describe pod " + pod + "\n\nLook for volume mount errors, scheduling failures, or missing resources."
+	case "DNSLookupFailed":
+		return "1. Verify the dependency hostname exists as a Kubernetes Service\n2. Check DNS suffix and namespace (svc.cluster.local)\n3. Validate CoreDNS health and pod DNS config"
+	case "NetworkTimeout":
+		return "1. Check endpoints for the target Service\n2. Validate NetworkPolicies allow traffic\n3. Ensure destination pods are healthy and listening"
 	}
 
 	return defaultFix
@@ -646,7 +678,7 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 					FixSuggestion{
 						Title:       "Add registry credentials",
 						Explanation: "Create a Docker registry secret in the failing namespace.",
-						Command:     "kubectl create secret docker-registry regcred \\\n  --docker-server=docker.io \\\n  --docker-username=<user> \\\n  --docker-password=<password> \\\n+  -n " + ns,
+						Command:     "kubectl create secret docker-registry regcred \\\n  --docker-server=docker.io \\\n  --docker-username=<user> \\\n  --docker-password=<password> \\\n  -n " + ns,
 					},
 					FixSuggestion{
 						Title:       "Attach imagePullSecrets",
@@ -667,7 +699,7 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 			{
 				Title:       "Create the missing ConfigMap",
 				Explanation: "Create the ConfigMap that the Deployment is already referencing.",
-				Command:     "kubectl create configmap " + name + " \\\n  --from-env-file=config.env \\\n+  -n " + ns,
+				Command:     "kubectl create configmap " + name + " \\\n  --from-env-file=config.env \\\n  -n " + ns,
 			},
 			{
 				Title:       "Verify the reference name",
@@ -684,7 +716,7 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 			{
 				Title:       "Create the missing Secret",
 				Explanation: "Create the Secret that the Deployment expects in this namespace.",
-				Command:     "kubectl create secret generic " + name + " \\\n  --from-literal=password=<value> \\\n+  -n " + ns,
+				Command:     "kubectl create secret generic " + name + " \\\n  --from-literal=password=<value> \\\n  -n " + ns,
 			},
 			{
 				Title:       "Verify the secret reference",
@@ -760,6 +792,32 @@ func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []
 				Command:     "kubectl -n " + ns + " describe pod " + pod,
 			},
 		}
+	case "DNSLookupFailed":
+		return []FixSuggestion{
+			{
+				Title:       "Verify service DNS target",
+				Explanation: "Confirm the service exists and has endpoints in the expected namespace.",
+				Command:     "kubectl -n " + ns + " get svc && kubectl -n " + ns + " get endpoints",
+			},
+			{
+				Title:       "Use FQDN in environment",
+				Explanation: "Set dependency host to the full Kubernetes DNS name.",
+				Command:     "DATABASE_HOST=postgres.default.svc.cluster.local",
+			},
+		}
+	case "NetworkTimeout":
+		return []FixSuggestion{
+			{
+				Title:       "Check service endpoints",
+				Explanation: "Ensure the destination service has ready pod endpoints.",
+				Command:     "kubectl -n " + ns + " get endpoints",
+			},
+			{
+				Title:       "Inspect network policies",
+				Explanation: "Verify no NetworkPolicy is blocking traffic between source and destination.",
+				Command:     "kubectl -n " + ns + " get networkpolicy",
+			},
+		}
 	}
 
 	return nil
@@ -784,6 +842,8 @@ func categorizeFailure(failureType string) string {
 		return "Application startup"
 	case "OOMKilled", "FailedScheduling", "PodPending":
 		return "Resource constraint"
+	case "DNSLookupFailed", "NetworkTimeout":
+		return "Connectivity"
 	case "ReadinessProbeFailed", "LivenessProbeFailed":
 		return "Health check"
 	default:
@@ -828,6 +888,16 @@ func buildQuickCommands(failureType string, failure k8s.PodFailure, evidence []s
 		commands = append(commands,
 			"kubectl describe nodes | grep -A5 'Conditions:'",
 			"kubectl get nodes -o custom-columns=NAME:.metadata.name,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory",
+		)
+	case "DNSLookupFailed":
+		commands = append(commands,
+			"kubectl -n "+ns+" get svc",
+			"kubectl -n "+ns+" get endpoints",
+		)
+	case "NetworkTimeout":
+		commands = append(commands,
+			"kubectl -n "+ns+" get endpoints",
+			"kubectl -n "+ns+" get networkpolicy",
 		)
 	case "ConfigMapMissing":
 		for _, e := range evidence {

@@ -40,6 +40,8 @@ const (
 	FailureConfigMapMissing FailureType = "ConfigMapMissing"
 	FailureSecretMissing    FailureType = "SecretMissing"
 	FailurePodPending       FailureType = "PodPending"
+	FailureDNSLookup        FailureType = "DNSLookupFailed"
+	FailureNetworkTimeout   FailureType = "NetworkTimeout"
 )
 
 type PodFailure struct {
@@ -471,6 +473,13 @@ func enrichFailureWithEventSignals(failure *PodFailure) {
 		// Secret mount failure
 		if isMountFail && strings.Contains(lower, "secret") && (strings.Contains(lower, "not found") || strings.Contains(lower, "failed")) {
 			secretHit = true
+		}
+
+		if strings.Contains(lower, "lookup") && strings.Contains(lower, "no such host") {
+			failure.Types = appendType(failure.Types, string(FailureDNSLookup))
+		}
+		if strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "connection timed out") || strings.Contains(lower, "context deadline exceeded") {
+			failure.Types = appendType(failure.Types, string(FailureNetworkTimeout))
 		}
 	}
 
