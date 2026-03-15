@@ -7,6 +7,12 @@ export interface PodFailure {
   events: string[];
 }
 
+export interface FixSuggestion {
+  title: string;
+  explanation: string;
+  command: string;
+}
+
 export interface Diagnosis {
   organizationId: string;
   clusterId: string;
@@ -16,12 +22,14 @@ export interface Diagnosis {
   image?: string;
   restartCount?: number;
   failureType: string;
+  category?: string;
   severity?: "critical" | "high" | "medium" | "low";
   likelyCause: string;
   suggestedFix: string;
   confidence: "low" | "medium" | "high";
   confidenceNote?: string;
   evidence?: string[];
+  fixSuggestions?: FixSuggestion[];
   quickCommands?: string[];
   context?: string[];
   events: string[];

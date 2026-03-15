@@ -8,24 +8,32 @@ import (
 )
 
 type Diagnosis struct {
-	OrganizationID string    `json:"organizationId"`
-	ClusterID      string    `json:"clusterId"`
-	PodName        string    `json:"podName"`
-	Namespace      string    `json:"namespace"`
-	Container      string    `json:"container"`
-	Image          string    `json:"image"`
-	RestartCount   int32     `json:"restartCount"`
-	FailureType    string    `json:"failureType"`
-	Severity       string    `json:"severity"` // critical | high | medium | low
-	LikelyCause    string    `json:"likelyCause"`
-	SuggestedFix   string    `json:"suggestedFix"`
-	Confidence     string    `json:"confidence"`
-	ConfidenceNote string    `json:"confidenceNote"`
-	Evidence       []string  `json:"evidence"`
-	QuickCommands  []string  `json:"quickCommands"`
-	Context        []string  `json:"context"`
-	Events         []string  `json:"events"`
-	Timestamp      time.Time `json:"timestamp"`
+	OrganizationID string          `json:"organizationId"`
+	ClusterID      string          `json:"clusterId"`
+	PodName        string          `json:"podName"`
+	Namespace      string          `json:"namespace"`
+	Container      string          `json:"container"`
+	Image          string          `json:"image"`
+	RestartCount   int32           `json:"restartCount"`
+	FailureType    string          `json:"failureType"`
+	Category       string          `json:"category"`
+	Severity       string          `json:"severity"` // critical | high | medium | low
+	LikelyCause    string          `json:"likelyCause"`
+	SuggestedFix   string          `json:"suggestedFix"`
+	Confidence     string          `json:"confidence"`
+	ConfidenceNote string          `json:"confidenceNote"`
+	Evidence       []string        `json:"evidence"`
+	FixSuggestions []FixSuggestion `json:"fixSuggestions"`
+	QuickCommands  []string        `json:"quickCommands"`
+	Context        []string        `json:"context"`
+	Events         []string        `json:"events"`
+	Timestamp      time.Time       `json:"timestamp"`
+}
+
+type FixSuggestion struct {
+	Title       string `json:"title"`
+	Explanation string `json:"explanation"`
+	Command     string `json:"command"`
 }
 
 type Rule struct {
@@ -109,7 +117,8 @@ func DiagnoseFailures(orgID, clusterID string, failures []k8s.PodFailure) []Diag
 			evidence := buildEvidence(failureType, failure)
 			ctx := buildContextSignals(failure)
 			likelyCause := deriveLikelyCause(rule.LikelyCause, failureType, failure, evidence)
-			suggestedFix := deriveSuggestedFix(rule.SuggestedFix, failureType, failure, evidence)
+			fixSuggestions := buildFixSuggestions(failureType, failure, evidence)
+			suggestedFix := deriveSuggestedFix(rule.SuggestedFix, failureType, failure, evidence, fixSuggestions)
 			quickCommands := buildQuickCommands(failureType, failure, evidence)
 			confidence, confidenceNote := enrichConfidence(rule.Confidence, failureType, failure, evidence)
 			severity := computeSeverity(confidence, failureType, failure)
@@ -123,12 +132,14 @@ func DiagnoseFailures(orgID, clusterID string, failures []k8s.PodFailure) []Diag
 				Image:          failure.Image,
 				RestartCount:   failure.RestartCount,
 				FailureType:    rule.FailureType,
+				Category:       categorizeFailure(rule.FailureType),
 				Severity:       severity,
 				LikelyCause:    likelyCause,
 				SuggestedFix:   suggestedFix,
 				Confidence:     confidence,
 				ConfidenceNote: confidenceNote,
 				Evidence:       evidence,
+				FixSuggestions: fixSuggestions,
 				QuickCommands:  quickCommands,
 				Context:        ctx,
 				Events:         failure.Events,
@@ -138,6 +149,34 @@ func DiagnoseFailures(orgID, clusterID string, failures []k8s.PodFailure) []Diag
 	}
 
 	return out
+}
+
+func HydrateDiagnosis(d *Diagnosis) {
+	if d == nil {
+		return
+	}
+
+	failure := k8s.PodFailure{
+		Namespace:    d.Namespace,
+		Name:         d.PodName,
+		Container:    d.Container,
+		Image:        d.Image,
+		RestartCount: d.RestartCount,
+		Events:       d.Events,
+	}
+
+	if strings.TrimSpace(d.Category) == "" {
+		d.Category = categorizeFailure(d.FailureType)
+	}
+	if strings.TrimSpace(d.Severity) == "" {
+		d.Severity = computeSeverity(d.Confidence, d.FailureType, failure)
+	}
+	if len(d.FixSuggestions) == 0 {
+		d.FixSuggestions = buildFixSuggestions(d.FailureType, failure, d.Evidence)
+	}
+	if strings.TrimSpace(d.SuggestedFix) == "" || strings.Contains(d.SuggestedFix, "Inspect") || strings.Contains(d.SuggestedFix, "Verify") || strings.Contains(d.SuggestedFix, "Check") {
+		d.SuggestedFix = deriveSuggestedFix(d.SuggestedFix, d.FailureType, failure, d.Evidence, d.FixSuggestions)
+	}
 }
 
 func enrichConfidence(base, failureType string, failure k8s.PodFailure, evidence []string) (string, string) {
@@ -407,12 +446,12 @@ func deriveLikelyCause(defaultCause, failureType string, failure k8s.PodFailure,
 		for _, e := range evidence {
 			if strings.Contains(e, "not found") {
 				if failure.Image != "" {
-					return "Image tag or repository does not exist: " + failure.Image
+					return "Image " + failure.Image + " does not exist in the registry"
 				}
 				return "Image tag or repository does not exist in registry"
 			}
 			if strings.Contains(e, "access denied") || strings.Contains(e, "insufficient_scope") {
-				return "Registry authentication or repository permission failure"
+				return "Missing registry credentials or repository permission for image pull"
 			}
 		}
 	case "CrashLoopBackOff":
@@ -471,7 +510,17 @@ func deriveLikelyCause(defaultCause, failureType string, failure k8s.PodFailure,
 	return defaultCause
 }
 
-func deriveSuggestedFix(defaultFix, failureType string, failure k8s.PodFailure, evidence []string) string {
+func deriveSuggestedFix(defaultFix, failureType string, failure k8s.PodFailure, evidence []string, fixSuggestions []FixSuggestion) string {
+	if len(fixSuggestions) > 0 {
+		primary := fixSuggestions[0]
+		if primary.Command != "" {
+			return primary.Explanation + "\n\n" + primary.Command
+		}
+		if primary.Explanation != "" {
+			return primary.Explanation
+		}
+	}
+
 	ns := failure.Namespace
 	pod := failure.Name
 
@@ -516,6 +565,192 @@ func deriveSuggestedFix(defaultFix, failureType string, failure k8s.PodFailure, 
 	}
 
 	return defaultFix
+}
+
+func buildFixSuggestions(failureType string, failure k8s.PodFailure, evidence []string) []FixSuggestion {
+	ns := failure.Namespace
+	pod := failure.Name
+	image := failure.Image
+
+	switch failureType {
+	case "ImagePullBackOff":
+		fixes := make([]FixSuggestion, 0, 3)
+		fixes = append(fixes, FixSuggestion{
+			Title:       "Check deployment image",
+			Explanation: "Confirm the workload is using the image you expect before patching credentials or tags.",
+			Command:     "kubectl -n " + ns + " get deployment -o yaml | grep image",
+		})
+		for _, e := range evidence {
+			if strings.Contains(e, "not found") {
+				fixes = append(fixes,
+					FixSuggestion{
+						Title:       "Use an existing image tag",
+						Explanation: "Update the Deployment to an image tag that already exists in the registry.",
+						Command:     "image: nginx:latest",
+					},
+					FixSuggestion{
+						Title:       "Push the missing image",
+						Explanation: "If this repository/tag should exist, publish it before the rollout continues.",
+						Command:     "docker push " + defaultValue(image, "<registry>/<image>:<tag>"),
+					},
+				)
+				return fixes
+			}
+			if strings.Contains(e, "access denied") {
+				fixes = append(fixes,
+					FixSuggestion{
+						Title:       "Add registry credentials",
+						Explanation: "Create a Docker registry secret in the failing namespace.",
+						Command:     "kubectl create secret docker-registry regcred \\\n+  --docker-server=docker.io \\\n+  --docker-username=<user> \\\n+  --docker-password=<password> \\\n+  -n " + ns,
+					},
+					FixSuggestion{
+						Title:       "Attach imagePullSecrets",
+						Explanation: "Patch the Deployment so kubelet uses the registry credentials during image pull.",
+						Command:     "spec:\n  imagePullSecrets:\n  - name: regcred",
+					},
+				)
+				return fixes
+			}
+		}
+		return fixes
+	case "ConfigMapMissing":
+		name := missingResourceName(evidence, "ConfigMap not found: ")
+		if name == "" {
+			name = "app-config"
+		}
+		return []FixSuggestion{
+			{
+				Title:       "Create the missing ConfigMap",
+				Explanation: "Create the ConfigMap that the Deployment is already referencing.",
+				Command:     "kubectl create configmap " + name + " \\\n+  --from-env-file=config.env \\\n+  -n " + ns,
+			},
+			{
+				Title:       "Verify the reference name",
+				Explanation: "Check the Deployment manifest for the referenced ConfigMap name.",
+				Command:     "kubectl -n " + ns + " get deployment -o yaml | grep -A3 " + name,
+			},
+		}
+	case "SecretMissing":
+		name := missingResourceName(evidence, "Secret not found: ")
+		if name == "" {
+			name = "db-secret"
+		}
+		return []FixSuggestion{
+			{
+				Title:       "Create the missing Secret",
+				Explanation: "Create the Secret that the Deployment expects in this namespace.",
+				Command:     "kubectl create secret generic " + name + " \\\n+  --from-literal=password=<value> \\\n+  -n " + ns,
+			},
+			{
+				Title:       "Verify the secret reference",
+				Explanation: "Check the Deployment manifest for the referenced Secret name.",
+				Command:     "kubectl -n " + ns + " get deployment -o yaml | grep -A3 " + name,
+			},
+		}
+	case "CrashLoopBackOff":
+		logsCmd := "kubectl -n " + ns + " logs " + pod + " --previous"
+		if failure.Container != "" {
+			logsCmd = "kubectl -n " + ns + " logs " + pod + " -c " + failure.Container + " --previous"
+		}
+		return []FixSuggestion{
+			{
+				Title:       "Inspect previous logs",
+				Explanation: "Start with the last crashed container logs. This usually exposes the exact startup error.",
+				Command:     logsCmd,
+			},
+			{
+				Title:       "Check common startup causes",
+				Explanation: "Review the three most common CrashLoop causes in Deployment config and app startup.",
+				Command:     "Common causes:\n- Missing environment variables\n- Failed DB connection\n- Wrong startup command",
+			},
+		}
+	case "OOMKilled":
+		return []FixSuggestion{
+			{
+				Title:       "Increase memory limit",
+				Explanation: "Raise the memory limit above the current ceiling and redeploy.",
+				Command:     "resources:\n  limits:\n    memory: 512Mi",
+			},
+			{
+				Title:       "Confirm runtime memory usage",
+				Explanation: "Check whether the container is genuinely exceeding its limit before increasing it again.",
+				Command:     "kubectl top pod " + pod + " -n " + ns,
+			},
+		}
+	case "FailedScheduling":
+		return []FixSuggestion{
+			{
+				Title:       "Inspect node capacity",
+				Explanation: "Confirm whether the cluster has enough allocatable CPU and memory.",
+				Command:     "kubectl get nodes -o custom-columns=NAME:.metadata.name,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory",
+			},
+			{
+				Title:       "Reduce resource requests",
+				Explanation: "If the pod is over-requesting resources, lower requests so it can schedule.",
+				Command:     "resources:\n  requests:\n    cpu: 100m\n    memory: 128Mi",
+			},
+		}
+	case "ReadinessProbeFailed", "LivenessProbeFailed":
+		probeName := "readinessProbe"
+		if failureType == "LivenessProbeFailed" {
+			probeName = "livenessProbe"
+		}
+		return []FixSuggestion{
+			{
+				Title:       "Check probe config",
+				Explanation: "Verify the probe path, port, and timing in the Deployment manifest.",
+				Command:     "kubectl -n " + ns + " get deployment -o yaml | grep -A10 " + probeName,
+			},
+			{
+				Title:       "Delay probe startup",
+				Explanation: "If the application starts slowly, increase the initial delay before probes begin.",
+				Command:     probeName + ":\n  initialDelaySeconds: 20\n  timeoutSeconds: 2",
+			},
+		}
+	case "PodPending":
+		return []FixSuggestion{
+			{
+				Title:       "Describe the pending pod",
+				Explanation: "The describe output will tell you whether the block is scheduling, volume, or image related.",
+				Command:     "kubectl -n " + ns + " describe pod " + pod,
+			},
+		}
+	}
+
+	return nil
+}
+
+func missingResourceName(evidence []string, prefix string) string {
+	for _, e := range evidence {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return ""
+}
+
+func categorizeFailure(failureType string) string {
+	switch failureType {
+	case "ImagePullBackOff":
+		return "Registry error"
+	case "ConfigMapMissing", "SecretMissing":
+		return "Configuration error"
+	case "CrashLoopBackOff":
+		return "Application startup"
+	case "OOMKilled", "FailedScheduling", "PodPending":
+		return "Resource constraint"
+	case "ReadinessProbeFailed", "LivenessProbeFailed":
+		return "Health check"
+	default:
+		return "Runtime issue"
+	}
+}
+
+func defaultValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func buildQuickCommands(failureType string, failure k8s.PodFailure, evidence []string) []string {

@@ -13,6 +13,7 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, onClose }
   if (!diagnosis) return null;
 
   const evidence = diagnosis.evidence || [];
+  const fixSuggestions = diagnosis.fixSuggestions || [];
   const quickCommands = diagnosis.quickCommands || [];
   const contextSignals = diagnosis.context || [];
 
@@ -39,7 +40,7 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, onClose }
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                Failure
+                Failure Type
               </label>
               <p>
                 <span className={`px-3 py-1 rounded-full text-sm font-semibold border ${
@@ -52,6 +53,7 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, onClose }
                   {diagnosis.failureType}
                 </span>
               </p>
+              <p className="text-sm text-gray-500 mt-2">Category: {diagnosis.category || 'Runtime issue'}</p>
             </div>
           </div>
 
@@ -109,19 +111,44 @@ export function DetailView({ diagnosis, timeline, firstSeen, lastSeen, onClose }
 
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-              Likely Cause
+              Root Cause
             </label>
-            <p className="text-gray-700 leading-relaxed">{diagnosis.likelyCause}</p>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+              <p className="text-gray-800 leading-relaxed">{diagnosis.likelyCause}</p>
+            </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-              Next Steps
+              Recommended Fix
             </label>
-            <p className="text-gray-700 leading-relaxed bg-blue-50 border border-blue-200 rounded-lg p-4">
-              {diagnosis.suggestedFix}
-            </p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+              <p className="text-gray-800 leading-relaxed whitespace-pre-line">{diagnosis.suggestedFix}</p>
+            </div>
           </div>
+
+          {fixSuggestions.length > 0 && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Fix Suggestions
+              </label>
+              <div className="space-y-3">
+                {fixSuggestions.map((fix, idx) => (
+                  <div key={idx} className="border border-emerald-200 bg-emerald-50 rounded-xl p-4 space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-emerald-950">{fix.title}</h3>
+                      <p className="text-sm text-emerald-900 mt-1">{fix.explanation}</p>
+                    </div>
+                    {fix.command ? (
+                      <div className="bg-slate-950 text-slate-100 rounded-lg p-3 text-sm font-mono overflow-x-auto whitespace-pre-wrap">
+                        {fix.command}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">

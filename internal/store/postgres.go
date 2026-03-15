@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS diagnoses (
 	confidence TEXT NOT NULL,
 	confidence_note TEXT NOT NULL DEFAULT '',
 	evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+	fix_suggestions JSONB NOT NULL DEFAULT '[]'::jsonb,
 	quick_commands JSONB NOT NULL DEFAULT '[]'::jsonb,
 	diag_context JSONB NOT NULL DEFAULT '[]'::jsonb,
 	events JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -99,6 +100,7 @@ CREATE TABLE IF NOT EXISTS diagnoses (
 
 ALTER TABLE diagnoses ADD COLUMN IF NOT EXISTS confidence_note TEXT NOT NULL DEFAULT '';
 ALTER TABLE diagnoses ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE diagnoses ADD COLUMN IF NOT EXISTS fix_suggestions JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE diagnoses ADD COLUMN IF NOT EXISTS quick_commands JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE diagnoses ADD COLUMN IF NOT EXISTS diag_context JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE diagnoses ADD COLUMN IF NOT EXISTS container TEXT NOT NULL DEFAULT '';
@@ -229,7 +231,7 @@ func (s *PostgresStore) ListDiagnoses(ctx context.Context, organizationID, clust
 	limitArgPosition := len(args)
 
 	query := fmt.Sprintf(`SELECT organization_id, cluster_id, pod_name, namespace, container, image, restart_count, failure_type,
-	        likely_cause, suggested_fix, confidence, confidence_note, evidence, quick_commands, diag_context, events, created_at
+	        likely_cause, suggested_fix, confidence, confidence_note, evidence, fix_suggestions, quick_commands, diag_context, events, created_at
 	 FROM diagnoses
 	 WHERE %s
 	 ORDER BY created_at DESC
@@ -249,6 +251,7 @@ func (s *PostgresStore) ListDiagnoses(ctx context.Context, organizationID, clust
 	for rows.Next() {
 		var diagnosis analyzer.Diagnosis
 		var evidenceJSON []byte
+		var fixSuggestionsJSON []byte
 		var quickCommandsJSON []byte
 		var contextJSON []byte
 		var eventsJSON []byte
@@ -267,6 +270,7 @@ func (s *PostgresStore) ListDiagnoses(ctx context.Context, organizationID, clust
 			&diagnosis.Confidence,
 			&diagnosis.ConfidenceNote,
 			&evidenceJSON,
+			&fixSuggestionsJSON,
 			&quickCommandsJSON,
 			&contextJSON,
 			&eventsJSON,
@@ -278,6 +282,12 @@ func (s *PostgresStore) ListDiagnoses(ctx context.Context, organizationID, clust
 		if len(evidenceJSON) > 0 {
 			if unmarshalErr := json.Unmarshal(evidenceJSON, &diagnosis.Evidence); unmarshalErr != nil {
 				return nil, fmt.Errorf("unmarshal diagnosis evidence: %w", unmarshalErr)
+			}
+		}
+
+		if len(fixSuggestionsJSON) > 0 {
+			if unmarshalErr := json.Unmarshal(fixSuggestionsJSON, &diagnosis.FixSuggestions); unmarshalErr != nil {
+				return nil, fmt.Errorf("unmarshal diagnosis fix suggestions: %w", unmarshalErr)
 			}
 		}
 
@@ -298,6 +308,8 @@ func (s *PostgresStore) ListDiagnoses(ctx context.Context, organizationID, clust
 				return nil, fmt.Errorf("unmarshal diagnosis events: %w", unmarshalErr)
 			}
 		}
+
+		analyzer.HydrateDiagnosis(&diagnosis)
 
 		out = append(out, diagnosis)
 	}
@@ -356,6 +368,7 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 			confidence,
 			confidence_note,
 			evidence,
+			fix_suggestions,
 			quick_commands,
 			diag_context,
 			events,
@@ -379,6 +392,7 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 			confidence,
 			confidence_note,
 			evidence,
+			fix_suggestions,
 			quick_commands,
 			diag_context,
 			events,
@@ -411,6 +425,7 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 		latest.confidence,
 		latest.confidence_note,
 		latest.evidence,
+		latest.fix_suggestions,
 		latest.quick_commands,
 		latest.diag_context,
 		latest.events,
@@ -443,6 +458,7 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 	for rows.Next() {
 		var failure CurrentFailure
 		var evidenceJSON []byte
+		var fixSuggestionsJSON []byte
 		var quickCommandsJSON []byte
 		var contextJSON []byte
 		var eventsJSON []byte
@@ -465,6 +481,7 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 			&failure.Diagnosis.Confidence,
 			&failure.Diagnosis.ConfidenceNote,
 			&evidenceJSON,
+			&fixSuggestionsJSON,
 			&quickCommandsJSON,
 			&contextJSON,
 			&eventsJSON,
@@ -481,6 +498,12 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 		if len(evidenceJSON) > 0 {
 			if unmarshalErr := json.Unmarshal(evidenceJSON, &failure.Diagnosis.Evidence); unmarshalErr != nil {
 				return nil, fmt.Errorf("unmarshal current failure evidence: %w", unmarshalErr)
+			}
+		}
+
+		if len(fixSuggestionsJSON) > 0 {
+			if unmarshalErr := json.Unmarshal(fixSuggestionsJSON, &failure.Diagnosis.FixSuggestions); unmarshalErr != nil {
+				return nil, fmt.Errorf("unmarshal current failure fix suggestions: %w", unmarshalErr)
 			}
 		}
 
@@ -503,6 +526,7 @@ func (s *PostgresStore) ListCurrentFailures(ctx context.Context, organizationID,
 		}
 
 		failure.Diagnosis.Timestamp = failure.LastSeen
+		analyzer.HydrateDiagnosis(&failure.Diagnosis)
 		failure.DurationSeconds = int64(now.Sub(failure.FirstSeen).Seconds())
 		if failure.DurationSeconds < 0 {
 			failure.DurationSeconds = 0
@@ -613,6 +637,23 @@ func computeDiagnosisSeverity(confidence, failureType string, restartCount int32
 	}
 }
 
+func categoryForFailureType(failureType string) string {
+	switch failureType {
+	case "ImagePullBackOff":
+		return "Registry error"
+	case "ConfigMapMissing", "SecretMissing":
+		return "Configuration error"
+	case "CrashLoopBackOff":
+		return "Application startup"
+	case "OOMKilled", "FailedScheduling", "PodPending":
+		return "Resource constraint"
+	case "ReadinessProbeFailed", "LivenessProbeFailed":
+		return "Health check"
+	default:
+		return "Runtime issue"
+	}
+}
+
 func (s *PostgresStore) SaveDiagnoses(ctx context.Context, organizationID, clusterID string, diagnoses []analyzer.Diagnosis) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -648,8 +689,8 @@ func (s *PostgresStore) SaveDiagnoses(ctx context.Context, organizationID, clust
 			organization_id, cluster_id, pod_name, namespace, failure_type,
 			container, image, restart_count,
 			likely_cause, suggested_fix, confidence, confidence_note,
-			evidence, quick_commands, diag_context, events, created_at
-		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			evidence, fix_suggestions, quick_commands, diag_context, events, created_at
+		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 	)
 	if err != nil {
 		return fmt.Errorf("prepare insert diagnosis: %w", err)
@@ -665,6 +706,11 @@ func (s *PostgresStore) SaveDiagnoses(ctx context.Context, organizationID, clust
 		quickCommandsJSON, marshalQuickErr := json.Marshal(diagnosis.QuickCommands)
 		if marshalQuickErr != nil {
 			return fmt.Errorf("marshal diagnosis quick commands: %w", marshalQuickErr)
+		}
+
+		fixSuggestionsJSON, marshalFixErr := json.Marshal(diagnosis.FixSuggestions)
+		if marshalFixErr != nil {
+			return fmt.Errorf("marshal diagnosis fix suggestions: %w", marshalFixErr)
 		}
 
 		contextJSON, marshalContextErr := json.Marshal(diagnosis.Context)
@@ -692,6 +738,7 @@ func (s *PostgresStore) SaveDiagnoses(ctx context.Context, organizationID, clust
 			diagnosis.Confidence,
 			diagnosis.ConfidenceNote,
 			evidenceJSON,
+			fixSuggestionsJSON,
 			quickCommandsJSON,
 			contextJSON,
 			eventsJSON,
