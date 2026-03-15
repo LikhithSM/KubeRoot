@@ -1,14 +1,17 @@
 import { useState, useMemo } from 'react';
 import { useDiagnoses } from '../hooks/useDiagnoses';
 import { FailureTable } from './FailureTable';
+import { ActiveIssuesTable } from './ActiveIssuesTable';
 import { DetailView } from './DetailView';
 import { FilterPanel } from './FilterPanel';
-import { Diagnosis } from '../types/index';
+import { CurrentFailure, Diagnosis } from '../types/index';
 import { format } from 'date-fns';
 
 export function Dashboard() {
-  const { diagnoses, loading, error } = useDiagnoses(5000);
+  const { diagnoses, currentFailures, loading, error } = useDiagnoses(5000);
   const [selectedDiagnosis, setSelectedDiagnosis] = useState<Diagnosis | null>(null);
+  const [selectedCurrentIssue, setSelectedCurrentIssue] = useState<CurrentFailure | null>(null);
+  const [activeTab, setActiveTab] = useState<'active' | 'history'>('active');
   const [filters, setFilters] = useState<{ namespace?: string; type?: string; confidence?: string }>({});
 
   // Deduplicate: keep only the latest entry per (namespace, podName, failureType).
@@ -23,27 +26,42 @@ export function Dashboard() {
     });
   }, [diagnoses]);
 
+  const currentDiagnoses = useMemo(() => currentFailures.map((i) => i.diagnosis), [currentFailures]);
+
+  const filteredCurrentFailures = useMemo(() => {
+    return currentFailures.filter((issue) => {
+      const d = issue.diagnosis;
+      if (filters.namespace && d.namespace !== filters.namespace) return false;
+      if (filters.type && d.failureType !== filters.type) return false;
+      if (filters.confidence && d.confidence !== filters.confidence) return false;
+      return true;
+    });
+  }, [currentFailures, filters]);
+
   const uniqueNamespaces = useMemo(() => {
-    const ns = new Set(activeDiagnoses.map((d) => d.namespace));
+    const source = activeTab === 'active' ? currentDiagnoses : activeDiagnoses;
+    const ns = new Set(source.map((d) => d.namespace));
     return Array.from(ns).sort();
-  }, [activeDiagnoses]);
+  }, [activeDiagnoses, currentDiagnoses, activeTab]);
 
   const uniqueTypes = useMemo(() => {
-    const types = new Set(activeDiagnoses.map((d) => d.failureType));
+    const source = activeTab === 'active' ? currentDiagnoses : activeDiagnoses;
+    const types = new Set(source.map((d) => d.failureType));
     return Array.from(types).sort();
-  }, [activeDiagnoses]);
+  }, [activeDiagnoses, currentDiagnoses, activeTab]);
 
   const stats = useMemo(() => {
+    const source = activeTab === 'active' ? currentDiagnoses : activeDiagnoses;
     return {
-      total: activeDiagnoses.length,
-      high: activeDiagnoses.filter((d) => d.confidence === 'high').length,
-      medium: activeDiagnoses.filter((d) => d.confidence === 'medium').length,
-      low: activeDiagnoses.filter((d) => d.confidence === 'low').length,
+      total: source.length,
+      high: source.filter((d) => d.confidence === 'high').length,
+      medium: source.filter((d) => d.confidence === 'medium').length,
+      low: source.filter((d) => d.confidence === 'low').length,
     };
-  }, [activeDiagnoses]);
+  }, [activeDiagnoses, currentDiagnoses, activeTab]);
 
   const lastUpdated = useMemo(() => format(new Date(), 'HH:mm:ss'), [diagnoses]);
-  const activeCluster = diagnoses[0]?.clusterId || 'unassigned';
+  const activeCluster = currentFailures[0]?.diagnosis.clusterId || diagnoses[0]?.clusterId || 'unassigned';
 
   return (
     <div className="shell">
@@ -127,18 +145,49 @@ export function Dashboard() {
               <div className="surface-card rounded-2xl overflow-hidden">
                 <div className="px-6 py-4 bg-white border-b border-gray-200 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div>
-                    <h2 className="text-lg font-semibold text-gray-900">Pod Failures</h2>
-                    <p className="text-sm text-gray-500">Live diagnoses from agent reports</p>
+                    <h2 className="text-lg font-semibold text-gray-900">Incident Intelligence</h2>
+                    <p className="text-sm text-gray-500">
+                      {activeTab === 'active' ? 'Current failing pods with duration and restart patterns' : 'Historical diagnosis events'}
+                    </p>
                   </div>
-                  <span className="text-xs text-gray-500 uppercase tracking-wider">
-                    {activeDiagnoses.length} failures - Updated {lastUpdated}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <div className="inline-flex bg-gray-100 rounded-lg p-1">
+                      <button
+                        className={`px-3 py-1.5 text-xs font-semibold rounded ${activeTab === 'active' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}
+                        onClick={() => setActiveTab('active')}
+                      >
+                        Active Issues
+                      </button>
+                      <button
+                        className={`px-3 py-1.5 text-xs font-semibold rounded ${activeTab === 'history' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}
+                        onClick={() => setActiveTab('history')}
+                      >
+                        History
+                      </button>
+                    </div>
+                    <span className="text-xs text-gray-500 uppercase tracking-wider">
+                      {stats.total} items - Updated {lastUpdated}
+                    </span>
+                  </div>
                 </div>
-                <FailureTable
-                  diagnoses={activeDiagnoses}
-                  filters={filters}
-                  onSelectRow={setSelectedDiagnosis}
-                />
+                {activeTab === 'active' ? (
+                  <ActiveIssuesTable
+                    items={filteredCurrentFailures}
+                    onSelectRow={(issue) => {
+                      setSelectedCurrentIssue(issue);
+                      setSelectedDiagnosis(issue.diagnosis);
+                    }}
+                  />
+                ) : (
+                  <FailureTable
+                    diagnoses={activeDiagnoses}
+                    filters={filters}
+                    onSelectRow={(d) => {
+                      setSelectedCurrentIssue(null);
+                      setSelectedDiagnosis(d);
+                    }}
+                  />
+                )}
               </div>
             </>
           ) : null}
@@ -147,7 +196,13 @@ export function Dashboard() {
         {/* Detail Modal */}
         <DetailView
           diagnosis={selectedDiagnosis}
-          onClose={() => setSelectedDiagnosis(null)}
+          timeline={selectedCurrentIssue?.timeline}
+          firstSeen={selectedCurrentIssue?.firstSeen}
+          lastSeen={selectedCurrentIssue?.lastSeen}
+          onClose={() => {
+            setSelectedDiagnosis(null);
+            setSelectedCurrentIssue(null);
+          }}
         />
 
         {/* Footer */}

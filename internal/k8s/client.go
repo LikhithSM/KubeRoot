@@ -35,15 +35,29 @@ const (
 	FailureImagePullBackOff FailureType = "ImagePullBackOff"
 	FailureOOMKilled        FailureType = "OOMKilled"
 	FailureFailedScheduling FailureType = "FailedScheduling"
+	FailureReadinessProbe   FailureType = "ReadinessProbeFailed"
+	FailureLivenessProbe    FailureType = "LivenessProbeFailed"
 )
 
 type PodFailure struct {
-	Namespace string
-	Name      string
-	Container string   // container name (if applicable)
-	Types     []string // one or more of the above failure types
-	Message   string   // optional: short message we can print now; events on Day 4
-	Events    []string
+	Namespace             string
+	Name                  string
+	Container             string // container name (if applicable)
+	Image                 string
+	Types                 []string // one or more of the above failure types
+	Message               string   // optional: short message we can print now; events on Day 4
+	Events                []string
+	RestartCount          int32
+	ContainerState        string
+	WaitingReason         string
+	TerminatedReason      string
+	ExitCode              int32
+	LastTerminationReason string
+	LastExitCode          int32
+	MemoryLimit           string
+	CPURequest            string
+	PodAgeSeconds         int64
+	RecentRollout         bool
 }
 
 // --- Config helpers (unchanged) ---
@@ -108,31 +122,68 @@ func ListPods(ctx context.Context, cs *kubernetes.Clientset) ([]PodInfo, error) 
 // DetectFailures scans pod statuses for well-known failure states.
 func DetectFailures(pod corev1.Pod) []PodFailure {
 	var results []PodFailure
+	now := time.Now().UTC()
+	podAgeSeconds := int64(0)
+	if !pod.CreationTimestamp.IsZero() {
+		podAgeSeconds = int64(now.Sub(pod.CreationTimestamp.Time).Seconds())
+		if podAgeSeconds < 0 {
+			podAgeSeconds = 0
+		}
+	}
+	recentRollout := podAgeSeconds > 0 && podAgeSeconds <= 10*60
 
 	// 1) Container-level states (CrashLoopBackOff, ImagePullBackOff, OOMKilled)
 	checkContainerStatuses := func(statuses []corev1.ContainerStatus) {
 		for _, cs := range statuses {
 			var types []string
 			msg := ""
+			containerSpec, foundContainerSpec := findContainerSpec(pod.Spec.Containers, cs.Name)
+			containerImage := cs.Image
+			if foundContainerSpec && containerSpec.Image != "" {
+				containerImage = containerSpec.Image
+			}
+
+			containerState := "Unknown"
+			waitingReason := ""
+			terminatedReason := ""
+			exitCode := int32(0)
+			lastTerminationReason := ""
+			lastExitCode := int32(0)
+			memoryLimit := ""
+			cpuRequest := ""
+
+			if foundContainerSpec {
+				if q, ok := containerSpec.Resources.Limits[corev1.ResourceMemory]; ok {
+					memoryLimit = q.String()
+				}
+				if q, ok := containerSpec.Resources.Requests[corev1.ResourceCPU]; ok {
+					cpuRequest = q.String()
+				}
+			}
 
 			// Waiting reasons
 			if cs.State.Waiting != nil {
+				containerState = "Waiting"
 				reason := cs.State.Waiting.Reason
+				waitingReason = reason
 				switch reason {
 				case "CrashLoopBackOff":
-					types = append(types, string(FailureCrashLoopBackOff))
+					types = appendType(types, string(FailureCrashLoopBackOff))
 					msg = cs.State.Waiting.Message
-				case "ImagePullBackOff":
-					types = append(types, string(FailureImagePullBackOff))
+				case "ImagePullBackOff", "ErrImagePull":
+					types = appendType(types, string(FailureImagePullBackOff))
 					msg = cs.State.Waiting.Message
 				}
 			}
 
 			// Terminated reasons
 			if cs.State.Terminated != nil {
+				containerState = "Terminated"
 				reason := cs.State.Terminated.Reason
+				terminatedReason = reason
+				exitCode = cs.State.Terminated.ExitCode
 				if reason == "OOMKilled" {
-					types = append(types, string(FailureOOMKilled))
+					types = appendType(types, string(FailureOOMKilled))
 					// message often empty here; keep it if present
 					if cs.State.Terminated.Message != "" {
 						msg = cs.State.Terminated.Message
@@ -140,13 +191,34 @@ func DetectFailures(pod corev1.Pod) []PodFailure {
 				}
 			}
 
+			if cs.State.Running != nil {
+				containerState = "Running"
+			}
+
+			if cs.LastTerminationState.Terminated != nil {
+				lastTerminationReason = cs.LastTerminationState.Terminated.Reason
+				lastExitCode = cs.LastTerminationState.Terminated.ExitCode
+			}
+
 			if len(types) > 0 {
 				results = append(results, PodFailure{
-					Namespace: pod.Namespace,
-					Name:      pod.Name,
-					Container: cs.Name,
-					Types:     types,
-					Message:   msg,
+					Namespace:             pod.Namespace,
+					Name:                  pod.Name,
+					Container:             cs.Name,
+					Image:                 containerImage,
+					Types:                 types,
+					Message:               msg,
+					RestartCount:          cs.RestartCount,
+					ContainerState:        containerState,
+					WaitingReason:         waitingReason,
+					TerminatedReason:      terminatedReason,
+					ExitCode:              exitCode,
+					LastTerminationReason: lastTerminationReason,
+					LastExitCode:          lastExitCode,
+					MemoryLimit:           memoryLimit,
+					CPURequest:            cpuRequest,
+					PodAgeSeconds:         podAgeSeconds,
+					RecentRollout:         recentRollout,
 				})
 			}
 		}
@@ -160,11 +232,13 @@ func DetectFailures(pod corev1.Pod) []PodFailure {
 		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
 			// Kubernetes typically sets Reason "Unschedulable" with explanatory Message.
 			results = append(results, PodFailure{
-				Namespace: pod.Namespace,
-				Name:      pod.Name,
-				Container: "", // N/A at pod level
-				Types:     []string{string(FailureFailedScheduling)},
-				Message:   cond.Message,
+				Namespace:     pod.Namespace,
+				Name:          pod.Name,
+				Container:     "", // N/A at pod level
+				Types:         []string{string(FailureFailedScheduling)},
+				Message:       cond.Message,
+				PodAgeSeconds: podAgeSeconds,
+				RecentRollout: recentRollout,
 			})
 		}
 	}
@@ -185,17 +259,48 @@ func GetFailedPods(ctx context.Context, cs *kubernetes.Clientset) ([]PodFailure,
 			continue
 		}
 
-		recentEvents, eventsErr := getRecentPodEvents(ctx, cs, p.Namespace, p.Name, 3)
+		recentEvents, eventsErr := getRecentPodEvents(ctx, cs, p.Namespace, p.Name, 8)
 		if eventsErr != nil {
 			return nil, fmt.Errorf("list events for pod %s/%s: %w", p.Namespace, p.Name, eventsErr)
 		}
 
 		for i := range failures {
 			failures[i].Events = recentEvents
+			enrichFailureWithEventSignals(&failures[i])
 		}
 		out = append(out, failures...)
 	}
 	return out, nil
+}
+
+func appendType(types []string, t string) []string {
+	for _, existing := range types {
+		if existing == t {
+			return types
+		}
+	}
+	return append(types, t)
+}
+
+func findContainerSpec(containers []corev1.Container, name string) (corev1.Container, bool) {
+	for _, c := range containers {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return corev1.Container{}, false
+}
+
+func enrichFailureWithEventSignals(failure *PodFailure) {
+	for _, event := range failure.Events {
+		lower := strings.ToLower(event)
+		if strings.Contains(lower, "readiness probe failed") {
+			failure.Types = appendType(failure.Types, string(FailureReadinessProbe))
+		}
+		if strings.Contains(lower, "liveness probe failed") {
+			failure.Types = appendType(failure.Types, string(FailureLivenessProbe))
+		}
+	}
 }
 
 func getRecentPodEvents(ctx context.Context, cs *kubernetes.Clientset, namespace, podName string, limit int) ([]string, error) {

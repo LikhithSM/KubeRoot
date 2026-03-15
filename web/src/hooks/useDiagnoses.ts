@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Diagnosis } from '../types/index';
-import { fetchDiagnoses } from '../services/api';
+import { CurrentFailure, Diagnosis } from '../types/index';
+import { fetchCurrentFailures, fetchDiagnoses } from '../services/api';
 
 export function useDiagnoses(interval: number = 5000) {
   const [diagnoses, setDiagnoses] = useState<Diagnosis[]>([]);
+  const [currentFailures, setCurrentFailures] = useState<CurrentFailure[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -15,8 +16,12 @@ export function useDiagnoses(interval: number = 5000) {
           setLoading(true);
         }
         setError(null);
-        const data = await fetchDiagnoses();
-        setDiagnoses(data);
+        const [historyData, currentData] = await Promise.all([
+          fetchDiagnoses(),
+          fetchCurrentFailures(),
+        ]);
+        setDiagnoses(historyData);
+        setCurrentFailures(currentData);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
@@ -30,5 +35,5 @@ export function useDiagnoses(interval: number = 5000) {
     return () => clearInterval(intervalId);
   }, [interval, hasLoaded]);
 
-  return { diagnoses, loading, error };
+  return { diagnoses, currentFailures, loading, error };
 }
